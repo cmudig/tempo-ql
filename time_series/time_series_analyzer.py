@@ -8,11 +8,24 @@ from datetime import datetime
 class TimeSeriesAnalyzer:
     """A class for analyzing time series data from Arrow/Parquet files."""
     
-    def __init__(self):
-        """Initialize the TimeSeriesAnalyzer."""
-        self.data = None
-        self.time_column = None
-        self.trajectory_column = None
+    def __init__(self, file_path: str, time_column: str, trajectory_column: str):
+        #determine file type and load accordingly
+        if file_path.lower().endswith('.parquet'):
+            table = pq.read_table(file_path)
+            self.data = table.to_pandas()
+        else:
+            #assume Feather by default
+            self.data = pd.read_feather(file_path)
+        
+        self.time_column = time_column
+        self.trajectory_column = trajectory_column
+        
+        #ensure timestamp column is datetime
+        if not pd.api.types.is_datetime64_any_dtype(self.data[time_column]):
+            self.data[time_column] = pd.to_datetime(self.data[time_column], unit='s')
+        
+        #prepare data structures for Tempo query engine
+        self._prepare_tempo_data_structures()
         
     def load_data(self, file_path: str, time_column: str, trajectory_column: str) -> None:
         """
