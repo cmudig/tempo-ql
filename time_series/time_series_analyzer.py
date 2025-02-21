@@ -25,8 +25,60 @@ class TimeSeriesAnalyzer:
             self.data[time_column] = pd.to_datetime(self.data[time_column], unit='s')
         
         #prepare data structures for Tempo query engine
-        self._prepare_tempo_data_structures()
+        self.prepare_tempo_data_structures()
+    
+    def prepare_tempo_data_structures(self):
+        #create an EventSet 
+        events_df = self.data.copy()
+        events_df.columns = [
+            'id' if col == self.trajectory_column else 
+            'time' if col == self.time_column else 
+            'eventtype' if col == 'eventtype' else 
+            'value' if col == 'value' else 
+            col 
+            for col in events_df.columns
+        ]
         
+        #if no eventtype column exists, create a default one
+        if 'eventtype' not in events_df.columns:
+            events_df['eventtype'] = 'default_event'
+        
+        #if no value column exists, use default
+        if 'value' not in events_df.columns:
+            events_df['value'] = 1.0
+        
+        #create query engine
+        self.events = [EventSet(events_df)]
+        
+        #create attributes from other numerical columns
+        attr_columns = self.data.select_dtypes(include=[np.number]).columns.tolist()
+        attr_columns = [col for col in attr_columns if col not in [self.time_column, self.trajectory_column, 'value']]
+        
+        attributes_data = {}
+        for col in attr_columns:
+            attributes_data[col] = self.data.set_index(self.trajectory_column)[col]
+        
+        self.attributes = [AttributeSet(pd.DataFrame(attributes_data))]
+        
+        #create empty IntervalSet (can be expanded later if needed)
+        self.intervals = [IntervalSet(pd.DataFrame({
+            'id': [],
+            'starttime': [],
+            'endtime': [],
+            'intervaltype': [],
+            'value': []
+        }))]
+        
+        #create query engine
+        self.query_engine = QueryEngine(
+            attributes=self.attributes, 
+            events=self.events, 
+            intervals=self.intervals
+        )
+        
+    def query(self, query_string: str):
+        return self.query_engine.query(query_string)
+    
     def load_data(self, file_path: str, time_column: str, trajectory_column: str) -> None:
         """
         Load data from an Arrow file.
