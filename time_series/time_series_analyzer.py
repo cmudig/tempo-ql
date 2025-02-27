@@ -4,6 +4,8 @@ import pyarrow.parquet as pq
 from typing import Optional, Dict, Any
 import numpy as np
 from datetime import datetime
+from evaluator import QueryEngine, get_all_trajectory_ids
+from data_types import AttributeSet, EventSet, IntervalSet
 
 class TimeSeriesAnalyzer:
     """A class for analyzing time series data from Arrow/Parquet files."""
@@ -78,6 +80,14 @@ class TimeSeriesAnalyzer:
         
     def query(self, query_string: str):
         return self.query_engine.query(query_string)
+    
+    def get_total_events(self) -> int:
+            """Return the total number of events in the dataset."""
+            return len(self.data)
+
+    def get_unique_trajectories(self) -> int:
+        """Return the number of unique trajectories in the dataset."""
+        return self.data[self.trajectory_column].nunique()
     
     def load_data(self, file_path: str, time_column: str, trajectory_column: str) -> None:
         """
