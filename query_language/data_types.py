@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import random
-from .numba_functions import *
+from numba_functions import *
 from numba.typed import List
 from numba import njit, jit
 
