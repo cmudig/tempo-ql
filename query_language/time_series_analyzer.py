@@ -23,8 +23,11 @@ class TimeSeriesAnalyzer:
         self.trajectory_column = trajectory_column
         
         #ensure timestamp column is datetime
+        """
         if not pd.api.types.is_datetime64_any_dtype(self.data[time_column]):
             self.data[time_column] = pd.to_datetime(self.data[time_column], unit='s')
+        """
+        
         
         #prepare data structures for Tempo query engine
         self.prepare_tempo_data_structures()
@@ -223,3 +226,69 @@ class TimeSeriesAnalyzer:
         return self.data.groupby(
             pd.Grouper(key=self.time_column, freq=freq)
         )[self.trajectory_column].nunique()
+
+    def split(self, **splits: Dict[str, float]) -> Dict[str, 'TimeSeriesAnalyzer']:
+        """
+        Split the dataset into multiple subsets based on trajectory IDs.
+        
+        Args:
+            **splits: Dictionary of split names and their proportions (e.g., train=0.7, val=0.15, test=0.15)
+                    The proportions should sum to 1.0
+        
+        Returns:
+            Dictionary mapping split names to TimeSeriesAnalyzer instances
+        """
+        #validate splits
+        total = sum(splits.values())
+        if not np.isclose(total, 1.0):
+            raise ValueError(f"Split proportions must sum to 1.0, got {total}")
+        
+        #get unique trajectory IDs
+        trajectory_ids = self.data[self.trajectory_column].unique()
+        
+        #shuffle the trajectory IDs for randomization
+        np.random.shuffle(trajectory_ids)
+        
+        #calculate split sizes
+        n_trajectories = len(trajectory_ids)
+        split_sizes = {name: int(np.round(proportion * n_trajectories)) 
+                    for name, proportion in splits.items()}
+        
+        #adjust the last split size to ensure all trajectories are assigned
+        names = list(splits.keys())
+        split_sizes[names[-1]] = n_trajectories - sum(split_sizes[name] for name in names[:-1])
+        
+        #create split trajectory ID sets
+        start_idx = 0
+        split_trajectory_ids = {}
+        for name in names:
+            end_idx = start_idx + split_sizes[name]
+            split_trajectory_ids[name] = trajectory_ids[start_idx:end_idx]
+            start_idx = end_idx
+        
+        #create a TimeSeriesAnalyzer for each split
+        result = {}
+        for name, ids in split_trajectory_ids.items():
+            #filter data for this split
+            split_data = self.data[self.data[self.trajectory_column].isin(ids)].copy()
+            
+            #create a temporary file for the split data
+            import tempfile
+            import os
+            
+            #create a temporary file with a unique name
+            temp_dir = tempfile.gettempdir()
+            random_suffix = np.random.randint(1000000)
+            temp_file = os.path.join(temp_dir, f"split_{name}_{random_suffix}.arrow")
+            
+            #save the split data to the temporary file
+            split_data.reset_index(drop=True).to_feather(temp_file)
+            
+            #create a new analyzer from the temporary file
+            result[name] = TimeSeriesAnalyzer(
+                file_path=temp_file,
+                time_column=self.time_column,
+                trajectory_column=self.trajectory_column
+            )
+            
+        return result

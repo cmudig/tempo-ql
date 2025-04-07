@@ -9,7 +9,7 @@ import logging
 import random
 import tqdm
 
-GRAMMAR = r"""
+GRAMMAR = """
 start: variable_expr | variable_list
 
 time_index: "EVERY"i atom [time_bounds]            -> periodic_time_index // periodic time literal
