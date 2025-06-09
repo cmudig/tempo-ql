@@ -9,7 +9,7 @@ import logging
 import random
 import tqdm
 from divisi.utils import convert_to_native_types
-from ..compute.filesystem import LocalFilesystem
+from filesystem import LocalFilesystem
 
 GRAMMAR = """
 start: variable_expr | variable_list
