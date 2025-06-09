@@ -166,6 +166,6 @@ cython_debug/
 /logs/
 
 **/node_modules/
-OMOPQueryEngine/mimic-iv-demo-data-in-the-omop-common-data-model-0.9
-OMOPQueryEngine/limeaide
+mimic-iv-demo-data-in-the-omop-common-data-model-0.9
+limeaide
 *.db
