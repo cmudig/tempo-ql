@@ -57,6 +57,22 @@ def compress_series(v):
         return v.astype(np.float32)
     return v
 
+def get_all_trajectory_ids(attributes, events, intervals):
+    all_ids = []
+    if attributes is not None:
+        for attr_set in attributes:
+            if len(attr_set.get_ids()):
+                all_ids.append(attr_set.get_ids().values)
+    if events is not None:
+        for event_set in events:
+            if len(event_set.get_ids()):
+                all_ids.append(event_set.get_ids().values)
+    if intervals is not None:
+        for interval_set in intervals:
+            if len(interval_set.get_ids()):
+                all_ids.append(interval_set.get_ids().values)
+    return np.unique(np.concatenate(all_ids))
+
     
 EXCLUDE_SERIES_METHODS = ("_repr_latex_",)
 
@@ -555,6 +571,10 @@ class AttributeSet(TimeSeriesQueryable):
         
     def has(self, attribute_name): return attribute_name in self.df.columns
     
+    def get_names(self): 
+        """Returns the attribute names stored in this AttributeSet."""
+        return self.df.columns
+    
     def get(self, attribute_name):
         return Attributes(self.df[attribute_name])
     
@@ -776,11 +796,15 @@ class EventSet(TimeSeriesQueryable):
         self.time_field = time_field
         self.id_field = id_field
         self.value_field = value_field
+        self.event_types = self.df[self.type_field].unique()
         
     def get_ids(self): return self.df[self.id_field]
     def get_types(self): return self.df[self.type_field]
     def get_times(self): return self.df[self.time_field]
     def get_values(self): return self.df[self.value_field]
+    
+    def get_unique_types(self):
+        return self.event_types.copy()
     
     def serialize(self):
         return {
@@ -1077,6 +1101,7 @@ class IntervalSet(TimeSeriesQueryable):
         self.end_time_field = end_time_field
         self.value_field = value_field
         self.id_field = id_field
+        self.event_types = self.df[type_field].unique()
         
     def serialize(self):
         return {
@@ -1105,6 +1130,9 @@ class IntervalSet(TimeSeriesQueryable):
     
     def get_types(self):
         return self.df[self.type_field]
+    
+    def get_unique_types(self):
+        return self.event_types.copy()
     
     def get_start_times(self):
         return self.df[self.start_time_field]

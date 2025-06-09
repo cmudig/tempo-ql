@@ -9,7 +9,7 @@ import logging
 import random
 import tqdm
 from divisi.utils import convert_to_native_types
-from filesystem import LocalFilesystem
+from .filesystem import LocalFilesystem
 
 GRAMMAR = """
 start: variable_expr | variable_list
@@ -87,7 +87,7 @@ CUT_TYPE: /bins?/i|/quantiles?/i
 value_list: ("("|"[") LITERAL ("," LITERAL)* (")"|"]")
 
 atom: VAR_NAME "(" expr ("," expr)* ")"                 -> function_call
-    | DATA_NAME ["AS"i UNIT]                            -> data_element
+    | data_element_query ["AS"i UNIT]                   -> data_element
     | time_quantity
     | LITERAL                               -> literal
     | "#NOW"i                                -> now 
@@ -104,6 +104,13 @@ time_quantity: LITERAL UNIT
 step_quantity: LITERAL /steps?/i
 UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 
+?data_element_query: "{" data_element_query_el (";" data_element_query_el)* "}" -> data_element_query_list
+    | DATA_NAME                     -> data_element_query_basic
+?data_element_query_el: VAR_NAME ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME)   -> data_element_eq
+    | VAR_NAME ("IN"i) value_list                       -> data_element_in
+    | VAR_NAME PATTERN_CMD LITERAL -> data_element_pattern
+    
+PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
 DATA_NAME: /\{[^}]*\}/
 VAR_NAME: /(?!(and|or|not|case|when|else|in|then|every|at|from|to|with|as)\b)[A-Za-z][A-Za-z0-9_]*/ 
 
@@ -116,28 +123,20 @@ QUOTED_STRING: /["'`][^"'`]*["'`]/
 %ignore WS
 """
 
-def get_all_trajectory_ids(attributes, events, intervals):
-    all_ids = []
-    if attributes is not None:
-        for attr_set in attributes:
-            if len(attr_set.get_ids()):
-                all_ids.append(attr_set.get_ids().values)
-    if events is not None:
-        for event_set in events:
-            if len(event_set.get_ids()):
-                all_ids.append(event_set.get_ids().values)
-    if intervals is not None:
-        for interval_set in intervals:
-            if len(interval_set.get_ids()):
-                all_ids.append(interval_set.get_ids().values)
-    return np.unique(np.concatenate(all_ids))
+DATA_TYPE_COALESCE = {
+    "attr": "attribute",
+    "event": "event",
+    "interval": "interval",
+    "attribute": "attribute",
+    "attributes": "attribute",
+    "events": "event",
+    "intervals": "interval"
+}
 
 class EvaluateExpression(lark.visitors.Transformer):
-    def __init__(self, attributes, events, intervals, eventtype_macros=None):
+    def __init__(self, dataset, eventtype_macros=None):
         super().__init__()
-        self.attributes = attributes
-        self.events = events
-        self.intervals = intervals
+        self.dataset = dataset
         self.time_index = None
         self.eventtype_macros = eventtype_macros if eventtype_macros is not None else {}
         self.value_placeholder = None
@@ -149,46 +148,57 @@ class EvaluateExpression(lark.visitors.Transformer):
         
     def get_all_ids(self):
         if self._all_ids is not None: return self._all_ids
-        self._all_ids = get_all_trajectory_ids(self.attributes, self.events, self.intervals)
+        self._all_ids = self.dataset.get_ids()
         return self._all_ids
         
-    def _get_data_element(self, query):
-        comps = query.split(":")
-        el_name = comps[-1]
-        # substitute with macro if available
-        if el_name in self.eventtype_macros:
-            el_name = self.eventtype_macros[el_name].strip()
-        if "," in el_name:
-            el_name = list(csv.reader([el_name], skipinitialspace=True))[0]
-            # Substitute macros again
-            el_name = [x.strip() for el in el_name for x in self.eventtype_macros.get(el, el).split(",")]
-        candidates = []
-        if len(comps) > 1:
-            # Only search within the given scope
-            scope = comps[0].lower()
-            if scope == "attr" and isinstance(el_name, list): raise ValueError(f"Cannot jointly retrieve multiple data elements from Attributes")
-            if scope not in ("attr", "event", "interval"): raise ValueError(f"Unknown data element scope {scope}")
-        else:
-            scope = None
-            
-        if (scope is None or scope == "attr") and not isinstance(el_name, list):
-            candidates += [attr_set.get(el_name) for attr_set in self.attributes if attr_set.has(el_name)]
-        if scope is None or scope == "event":
-            candidates += [event_set.get(el_name) for event_set in self.events]
-        if scope is None or scope == "interval":
-            candidates += [interval_set.get(el_name) for interval_set in self.intervals]
-
-        candidates = [c for c in candidates if len(c) > 0]
-        if len(candidates) > 1:
-            raise ValueError(f"Multiple data elements found with name {comps[-1]}. Try specifying a scope such as {{attr:{comps[-1]}}} (or event: or interval:).")
-        elif len(candidates) == 0:
-            raise KeyError(f"No data element found with name {query}")
-        return candidates[0]
-        
-    def data_element(self, args):
+    def data_element_query_basic(self, args):
         match = re.match(r"\{([^\}]+)\}", args[0], flags=re.I)
         query = match.group(1)
-        value = self._get_data_element(query)
+        if query in self.eventtype_macros:
+            query = self.eventtype_macros[query].strip()
+        if "," in query:
+            query = list(csv.reader([query], skipinitialspace=True))[0]
+            # Substitute macros again
+            query = [x.strip() for el in query for x in self.eventtype_macros.get(el, el).split(",")]
+        if isinstance(query, list):
+            return {"name": ("in", query)}
+        return {"name": ("equals", query)}
+
+    def data_element_query_list(self, args):
+        return {k: v for arg in args for k, v in arg.items()}
+        
+    def data_element_eq(self, args):
+        if args[0].lower() not in ("id", "name", "type", "scope", "value"):
+            raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
+        return {args[0].lower(): ("equals", self._parse_literal(args[1]) if args[1].type == "LITERAL" else args[1].value)}
+    
+    def data_element_in(self, args):
+        if args[0].lower() not in ("id", "name", "type", "scope", "value"):
+            raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
+        if args[0].lower() in ("value", "scope", "type"):
+            raise ValueError(f"'in' queries cannot be used with '{args[0]}' field specifier")
+        return {args[0].lower(): ("in", args[1])}
+    
+    def data_element_pattern(self, args):
+        if args[0].lower() not in ("id", "name", "type", "scope", "value"):
+            raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
+        if args[0].lower() in ("value", "scope", "type"):
+            raise ValueError(f"Pattern-based queries cannot be used with '{args[0]}' field specifier")
+        return {args[0].lower(): (args[1].lower(), self._parse_literal(args[2]))}
+
+    def data_element(self, args):
+        requested_type = args[0].get("type", (None, None))[1]
+        if requested_type is not None:
+            if requested_type not in DATA_TYPE_COALESCE:
+                raise ValueError(f"Unknown data type '{requested_type}'; must be attribute, event, interval, or similar")
+            requested_type = DATA_TYPE_COALESCE[requested_type]
+            
+        value = self.dataset.get_data_element(
+            scope=args[0].get("scope", None),
+            data_type=requested_type,
+            concept_id_query=args[0].get("id", None),
+            concept_name_query=args[0].get("name", None),
+            value_field=args[0].get("value", None))
         if len(args) > 1 and args[1]:
             value /= Duration(1, args[1])
         return value
@@ -313,39 +323,12 @@ class EvaluateExpression(lark.visitors.Transformer):
     
     def min_time(self, args):
         if self._mintimes is not None: return self._mintimes
-        
-        event_times = np.concatenate([event_set.get_times() for event_set in self.events] if self.events else [np.array([])])
-        event_ids = np.concatenate([event_set.get_ids() for event_set in self.events] if self.events else [np.array([])])
-        event_mins = pd.Series(event_times, name='times').groupby(event_ids).agg("min")
-        
-        interval_times = np.concatenate([interval_set.get_start_times() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_ids = np.concatenate([interval_set.get_ids() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_mins = pd.Series(interval_times, name='times').groupby(interval_ids).agg("min")
-
-        ids = self.get_all_ids()
-        all_mins = pd.merge(pd.Series(ids, name="id"), pd.merge(event_mins, interval_mins, how='outer', left_index=True, right_index=True), left_on="id", right_index=True).set_index("id").min(axis=1)
-        self._mintimes = Attributes(all_mins.rename("mintime"))
+        self._mintimes = self.dataset.get_min_times()
         return self._mintimes
     
     def max_time(self, args): 
         if self._maxtimes is not None: return self._maxtimes
-        
-        event_times = np.concatenate([event_set.get_times() for event_set in self.events] if self.events else [np.array([])])
-        event_ids = np.concatenate([event_set.get_ids() for event_set in self.events] if self.events else [np.array([])])
-        event_maxes = pd.Series(event_times, name='times').groupby(event_ids).agg("max")
-        
-        interval_times = np.concatenate([interval_set.get_end_times() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_ids = np.concatenate([interval_set.get_ids() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_maxes = pd.Series(interval_times, name='times').groupby(interval_ids).agg("max")
-
-        ids = self.get_all_ids()
-        all_maxes = pd.merge(pd.Series(ids, name="id"), pd.merge(event_maxes, interval_maxes, how='outer', left_index=True, right_index=True), left_on="id", right_index=True).set_index("id").max(axis=1)
-        # Offset the time by 1 so that it includes all events and intervals
-        if pd.api.types.is_datetime64_any_dtype(all_maxes.dtype):
-            all_maxes += datetime.timedelta(seconds=1)
-        else:
-            all_maxes += 1
-        self._maxtimes = Attributes(all_maxes.rename("maxtime"))
+        self._maxtimes = self.dataset.get_max_times()
         return self._maxtimes
 
     def isin(self, args):
@@ -376,7 +359,7 @@ class EvaluateExpression(lark.visitors.Transformer):
         return args[0].with_values(strings.str.startswith(args[1]))
     def endswith(self, args):
         strings = args[0].get_values().astype(str)
-        return args[0].with_values(strings.str.startswith(args[1]))
+        return args[0].with_values(strings.str.endswith(args[1]))
     
     def negate(self, args): return ~args[0]
     
@@ -617,11 +600,9 @@ class EvaluateExpression(lark.visitors.Transformer):
         
 
 class EvaluateQuery(lark.visitors.Interpreter):
-    def __init__(self, attributes, events, intervals, variable_transform=None, eventtype_macros=None, cache=None, verbose=False, update_fn=None):
+    def __init__(self, dataset, variable_transform=None, eventtype_macros=None, cache=None, verbose=False, update_fn=None):
         super().__init__()
-        self.attributes = attributes
-        self.events = events
-        self.intervals = intervals
+        self.dataset = dataset
         self.cache = cache
         self.eventtype_macros = eventtype_macros if eventtype_macros is not None else {}
         self.update_fn = update_fn
@@ -641,7 +622,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             self.variable_transform = None
             self.variable_restore = None
         self.verbose = verbose
-        self.evaluator = EvaluateExpression(self.attributes, self.events, self.intervals, self.eventtype_macros)
+        self.evaluator = EvaluateExpression(self.dataset, self.eventtype_macros)
         
     def get_all_ids(self):
         return self.evaluator.get_all_ids()
@@ -962,33 +943,19 @@ class QueryResultCache:
 
     
 class QueryEngine:
-    def __init__(self, attributes, events, intervals, eventtype_macros=None, cache_fs=None):
-        self.attributes = attributes if attributes is not None else [AttributeSet(pd.DataFrame([]))]
-        self.events = events if events is not None else [EventSet(pd.DataFrame({
-            "id": [],
-            "eventtype": [],
-            "time": [],
-            "value": [],
-        }))]
-        self.intervals = intervals if intervals is not None else [IntervalSet(pd.DataFrame({
-            "id": [],
-            "starttime": [],
-            "endtime": [],
-            "intervaltype": [],
-            "value": []
-        }))]
+    def __init__(self, dataset, eventtype_macros=None, cache_fs=None):
+        super().__init__()
+        self.dataset = dataset
         self.parser = lark.Lark(GRAMMAR, parser="earley")
         self.eventtype_macros = eventtype_macros
         if cache_fs is not None: self.cache = QueryResultCache(cache_fs)
         else: self.cache = None
         
     def get_ids(self):
-        return get_all_trajectory_ids(self.attributes, self.events, self.intervals)
+        return self.dataset.get_ids()
     
     def query(self, query_string, variable_transform=None, use_cache=True, update_fn=None):
-        query_evaluator = EvaluateQuery(self.attributes, 
-                                        self.events, 
-                                        self.intervals, 
+        query_evaluator = EvaluateQuery(self.dataset, 
                                         eventtype_macros=self.eventtype_macros, 
                                         variable_transform=variable_transform,
                                         cache=self.cache if use_cache else None, 
@@ -1033,8 +1000,10 @@ if __name__ == '__main__':
         'value': np.random.uniform(0, 100)
     } for _ in range(10)]))
 
-    dataset = QueryEngine([attributes], [events], [intervals])
+    from .tempo_csv.dataset import TempoCSVDataset
+    dataset = QueryEngine(TempoCSVDataset([attributes], [events], [intervals]))
     print(dataset.query("{a2} impute mean"))
+    print(dataset.query("{name contains /[12]/i; type = event}"))
     # print(dataset.query("(min e2: min {'e1', e2} from now - 30 seconds to now, max e2: max {e2} from now - 30 seconds to now) at every {e1} from {start} to {end}"))
     # print(dataset.query("min {e1} from #now - 30 seconds to #now cut 3 quantiles impute 'Missing' at every {e1} from #mintime to #maxtime"))
     # print(dataset.query("myagg: mean ((now - (last time({e1}) from -1000 to now)) at every {e1} from 0 to {end}) from {start} to {end}"))
@@ -1042,6 +1011,6 @@ if __name__ == '__main__':
     # print(dataset.query("mean {e1} * 3 from now - 30 s to now"))
     # print(dataset.query("max(mean {e2} from now - 30 seconds to now, mean {e1} from now - 30 seconds to now) at every {e2} from {start} to {end}"))
     # print(events.get('e1'))
-    print(dataset.query("{e1} - (last {e1} before {e1})"))
+    print(dataset.query("{name = e1} - (last {e1} before {e1})"))
     # print(dataset.query("mean {e1} where {e1} > (last {e1} from #now - 30 sec to #now) from #now to #now + 30 sec every 30 sec from {start} to {end}", use_cache=False))
     # print(dataset.query("mean (case when {e1} > (last {e2} from #now - 30 sec to #now) then {e1} else 0 end) from #now to #now + 30 sec every 30 sec from {start} to {end}", use_cache=False))
