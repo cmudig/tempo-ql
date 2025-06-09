@@ -160,5 +160,12 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+**/.ipynb_checkpoints/
+
 /datasets/
 /logs/
+
+**/node_modules/
+OMOPQueryEngine/mimic-iv-demo-data-in-the-omop-common-data-model-0.9
+OMOPQueryEngine/limeaide
+*.db
