@@ -1,8 +1,82 @@
-from sqlalchemy import create_engine, MetaData, Table, select, or_
+from sqlalchemy import create_engine, MetaData, Table, select, or_, case, union, func
+from sqlalchemy.types import Interval
 from sqlalchemy.orm import sessionmaker, Session
 import pandas as pd
 import numpy as np
 import re
+import datetime
+from ..data_types import *
+
+ID_FIELD = 'person_id'
+
+SCOPE_INFO = {
+    'Drug': {
+        'table_name': 'drug_exposure', 
+        'concept_id_field': 'drug_source_concept_id',
+        'type': 'interval',
+        'start_time_field': 'drug_exposure_start_datetime',
+        'end_time_field': 'drug_exposure_end_datetime',
+        'default_value_field': 'quantity'
+    },
+    'Condition': {
+        'table_name': 'condition_occurrence', 
+        'concept_id_field': 'condition_source_concept_id',
+        'start_time_field': 'condition_start_datetime',
+        'end_time_field': 'condition_end_datetime',
+        'type': 'interval',
+    },
+    'Procedure': {
+        'table_name': 'procedure_occurrence', 
+        'concept_id_field': 'procedure_source_concept_id',
+        'time_field': 'procedure_datetime',
+        'type': 'event'
+    },
+    'Observation': {
+        'table_name': 'observation', 
+        'concept_id_field': 'observation_source_concept_id',
+        'type': 'event',
+        'default_value_field': 'value_as_string',
+        'time_field': 'observation_datetime',
+    },
+    'Measurement': {
+        'table_name': 'measurement', 
+        'concept_id_field': 'measurement_source_concept_id',
+        'type': 'event',
+        'default_value_field': 'value_as_number',
+        'time_field': 'measurement_datetime',
+    },
+    'Device': {
+        'table_name': 'device_exposure', 
+        'concept_id_field': 'device_source_concept_id',
+        'type': 'interval',
+        'start_time_field': 'device_exposure_start_datetime',
+        'end_time_field': 'device_exposure_end_datetime',
+        'default_value_field': 'quantity'
+    }
+}
+
+ATTRIBUTES = {
+    'Gender': {
+        'table_name': 'person',
+        'value_field': 'gender_concept_id',
+        'convert_concept': True
+    },
+    'Birth Date': {
+        'table_name': 'person',
+        'value_field': 'birth_datetime',
+        'convert_concept': False
+    },
+    'Race': {
+        'table_name': 'person',
+        'value_field': 'race_concept_id',
+        'convert_concept': True
+    },
+    'Ethnicity': {
+        'table_name': 'person',
+        'value_field': 'ethnicity_concept_id',
+        'convert_concept': True
+    }
+}
 
 class OMOPDataset:
     def __init__(self, connection_string):
@@ -12,180 +86,208 @@ class OMOPDataset:
         self.metadata.reflect(bind=self.connection)
         self.candidate_names = ['Heart Rate', 'Respiratory Rate', 'Breath Rate', 'Oxygen Saturation', 'Blood Pressure']
 
-    def search_omop_id(self, name_dict):
+    def _make_concept_filters(self, column, query):
+        query_type, query_data = query
+        if query_type == "equals":
+            filters = [column == query_data]
+        elif query_type == "in":
+            filters = [column.in_(query_data)]
+        elif query_type in ("contains", "matches", "startswith", "endswith"):
+            if isinstance(query_data, re.Pattern):
+                pattern_string = query_data.pattern
+                flags = query_data.flags
+            else:
+                pattern_string = re.escape(query_data)
+                flags = re.NOFLAG
+            if query_type == "matches": 
+                pattern_string = "^" + pattern_string + "$"
+            elif query_type == "startswith":
+                pattern_string = "^" + pattern_string + ".*"
+            elif query_type == "endswith":
+                pattern_string = ".*" + pattern_string + "$"
+            else:
+                pattern_string = ".*" + pattern_string + ".*"
+            filters = [column.regexp_match(pattern_string, flags='i' if flags & re.I else None)]
+        return filters
+        
+    def search_omop_concept_id(self, concept_id_query=None, concept_name_query=None):
         """
-        Search for OMOP IDs for a given name.
+        Search for OMOP IDs for a given name using the concept table.
         
         Args:
-            name_dict (dict): A dictionary containing name information
-        
-        Returns:
-            result_list: A list of OMOP IDs
-        """
-        result_list = []
-        names = None if 'name' not in name_dict else name_dict['name']
-        ids = None if 'id' not in name_dict else name_dict['id']
-
-        if ids is not None:
-            for id_value in ids:
-                with self.engine.connect() as conn:
-                    stmt = select(
-                        self.metadata.tables['concept'].c.concept_id,
-                        self.metadata.tables['concept'].c.concept_name,
-                        self.metadata.tables['concept'].c.domain_id
-                    ).where(self.metadata.tables['concept'].c.concept_id == id_value)
-                    result = conn.execute(stmt).fetchall()
-                    for row in result:
-                        result_list.append(row)
-        if names is not None:
-            filters = [self.metadata.tables['concept'].c.concept_name.ilike(f'%{name}%') for name in names]
-            print("names: ", names)
+            concept_id_query: Constraints on which concept IDs to retrieve,
+                provided as a tuple (search_type, search_data).
+            concept_name_query: Constraints on which concept IDs to retrieve based
+                on the concept name, provided as a tuple (search_type, search_data).
             
-            for filter in filters:
-                print("filter: ", str(filter))
-            with self.engine.connect() as conn:
-                stmt = select(self.metadata.tables['concept'].c.concept_id, self.metadata.tables['concept'].c.concept_name, self.metadata.tables['concept'].c.domain_id).where(or_(*filters))
-                result = conn.execute(stmt).fetchall()
-                for row in result:
-                    result_list.append(row)
-        return result_list
-    
-    def process_omop_id(self, omop_ids):
+        Returns:
+            result_list: Matching OMOP IDs as dictionaries of {scope: (concept 
+            ID, concept name), ...}
         """
-        Process a list of OMOP IDs and organize them by domain.
+        if (concept_id_query is None) == (concept_name_query is None):
+            raise ValueError("Exactly one of id or name must be provided to search for OMOP concepts")
+        
+        if concept_id_query is not None:
+            filters = self._make_concept_filters(self.metadata.tables['concept'].c.concept_id, concept_id_query)
+        if concept_name_query is not None:
+            filters = self._make_concept_filters(self.metadata.tables['concept'].c.concept_name, concept_name_query)
+        
+        with self.engine.connect() as conn:
+            stmt = select(
+                self.metadata.tables['concept'].c.concept_id,
+                self.metadata.tables['concept'].c.concept_name,
+                self.metadata.tables['concept'].c.domain_id
+            ).where(or_(*filters))
+            result = conn.execute(stmt).fetchall()
+            scopes = {}
+            for row in result:
+                scopes.setdefault(row[-1], []).append(tuple(row[:2]))
+            return scopes
+        
+    def attempt_attribute_extract(self, concept_name_query):
+        """
+        Extract an attribute from the dataset based on a concept name query.
+        The query must specify a single attribute name.
+        """
+        query_type, query_data = concept_name_query
+        if query_type != "equals":
+            return
+        
+        if query_data not in ATTRIBUTES:
+            return
+        
+        attr_info = ATTRIBUTES[query_data]
+        table = attr_info['table_name']
+        with self.engine.connect() as conn:
+            if attr_info.get('convert_concept', False):
+                # Join the attribute table with the concept table to get the 
+                # concept names for each concept ID stored in the value field
+                stmt = select(
+                    self.metadata.tables[table].c[ID_FIELD],
+                    case(
+                        (self.metadata.tables['concept'].c.concept_name != None,
+                         self.metadata.tables['concept'].c.concept_name),
+                        else_=self.metadata.tables[table].c[attr_info['value_field']]
+                    ).label(attr_info['value_field'])
+                ).select_from(self.metadata.tables[table].join(
+                    self.metadata.tables['concept'], 
+                    self.metadata.tables[table].c[attr_info['value_field']] == self.metadata.tables['concept'].c.concept_id,
+                    isouter=True
+                ))
+            else:
+                stmt = select(
+                    self.metadata.tables[table].c[ID_FIELD],
+                    self.metadata.tables[table].c[attr_info['value_field']]
+                )
+            result = conn.execute(stmt)
+            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            return Attributes(result_df.set_index(ID_FIELD)[attr_info['value_field']])
+        
+    def extract_data_for_concepts(self, scope, concepts, value_field=None):
+        """
+        Extract data from a given scope that matches the given concepts.
         
         Args:
-            omop_ids (list): A list of tuples (concept_id, concept_name, domain_id)
-        
-        Returns:
-            dict: A dictionary where keys are domain_ids and values are lists of (concept_id, concept_name) tuples
-        """
-        domain_dict = {}
+            scope (str): The name of the scope in which to retrieve data
+            concepts (List[Tuple[str, str]]): Set of concepts to match against,
+                where each tuple contains (concept ID, concept name)
+            value_field (str | None): the field to extract as the value, or None
+                to use the default value field for the scope
 
-        for concept_id, concept_name, domain_id in omop_ids:
-            if domain_id not in domain_dict:
-                domain_dict[domain_id] = []
-            
-            # Check if this (concept_id, concept_name) pair already exists in this domain
-            concept_pair = (concept_id, concept_name)
-            if concept_pair not in domain_dict[domain_id]:
-                domain_dict[domain_id].append(concept_pair)
-        
-        return domain_dict
-    
-    def domain_id_to_table(self, domain_id):
-        if domain_id == 'Drug':
-            return 'drug_exposure', 'drug_source_concept_id'
-        elif domain_id == 'Condition':
-            return 'condition_occurrence', 'condition_source_concept_id'
-        elif domain_id == 'Procedure':
-            return 'procedure_occurrence', 'procedure_source_concept_id'
-        elif domain_id == 'Observation':
-            return 'observation', 'observation_source_concept_id'
-        elif domain_id == 'Measurement':
-            return 'measurement', 'measurement_source_concept_id'
-        elif domain_id == 'Device':
-            return 'device_exposure', 'device_source_concept_id'
-            
-    
-    def extract_data_from_one_data_element(self, data_element):
+        Returns: an Attributes, Events, or Intervals object representing the 
+            data for the given set of concepts.
         """
-        Extract data from a single data element.
-        
-        Args:
-            data_element (dict): A dictionary containing data element information
-
-        Returns:
-            result_df: A pandas DataFrame containing the data
-        """
-        result = {}
-        omop_ids = self.search_omop_id(data_element)
-        domain_dict = self.process_omop_id(omop_ids)
-        scope = None if 'scope' not in data_element else data_element['scope']
-        # check for scope first
-        if scope is not None:
-            domain = scope
-            concept_ids = [concept_id for concept_id, concept_name in domain_dict[domain]]
-            table_name, source_concept_id = self.domain_id_to_table(domain)
-            table = self.metadata.tables[table_name]
-            with self.engine.connect() as conn:
-                stmt = select(table).where(getattr(table.c, source_concept_id).in_(concept_ids))
-                domain_result = conn.execute(stmt).fetchall()
-                if domain_result:
-                    domain_df = pd.DataFrame(domain_result, columns=table.columns.keys())
-                    result[table_name] = domain_df
+        scope_info = SCOPE_INFO[scope]
+        table = self.metadata.tables[scope_info['table_name']]
+        if value_field is not None:
+            if value_field not in table.c:
+                raise AttributeError(f"Value field '{value_field}' not present in scope {scope}")
+        with self.engine.connect() as conn:
+            if scope_info['type'] == 'attribute':
+                # TODO make this more flexible with defaults
+                table_fields = [table.c[ID_FIELD], table.c[value_field]]
+            elif scope_info['type'] == 'event':
+                table_fields = [table.c[ID_FIELD], 
+                                table.c[scope_info['time_field']].label('time'),
+                                table.c[scope_info['concept_id_field']].label('concept_id')]
+                if value_field is not None:
+                    table_fields.append(table.c[value_field])
+                elif scope_info.get('default_value_field') is not None:
+                    table_fields.append(table.c[scope_info.get('default_value_field')].label('value'))
+                    value_field = 'value'
+            elif scope_info['type'] == 'interval':
+                table_fields = [table.c[ID_FIELD], 
+                                table.c[scope_info['concept_id_field']].label('concept_id'),
+                                table.c[scope_info['start_time_field']].label('starttime'), 
+                                table.c[scope_info['end_time_field']].label('endtime')]
+                if value_field is not None:
+                    table_fields.append(table.c[value_field])
+                elif scope_info.get('default_value_field') is not None:
+                    table_fields.append(table.c[scope_info.get('default_value_field')].label('value'))
+                    value_field = 'value'
+                    
+            stmt = select(*table_fields).where(table.c[scope_info['concept_id_field']].in_([c[0] for c in concepts]))
+            result = conn.execute(stmt)
+            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
             
-        # Only handle name 
-        else:
-            
-            # Process each domain and extract data from corresponding tables
-            for domain_id, concept_pairs in domain_dict.items():
-                concept_ids = [concept_id for concept_id, concept_name in concept_pairs]
-                print("concept_ids: ", concept_ids, concept_pairs)
-                # Map domain to table name
-                table_name, source_concept_id = self.domain_id_to_table(domain_id)
-                if table_name:
-                    # Query drug_exposure table
-                    table = self.metadata.tables[table_name]
-                    with self.engine.connect() as conn:
-                        stmt = select(table).where(getattr(table.c, source_concept_id).in_(concept_ids))
-                        domain_result = conn.execute(stmt).fetchall()
-                        if domain_result:
-                            domain_df = pd.DataFrame(domain_result, columns=table.columns.keys())
-                            result[table_name] = domain_df
-            
-        return result
+            if scope_info['type'] == 'attribute':
+                return Attributes(result_df.set_index(ID_FIELD)[value_field])
+            elif scope_info['type'] == 'event':
+                return Events(result_df, 
+                              id_field=ID_FIELD,
+                              type_field='concept_id',
+                              time_field='time',
+                              value_field=value_field)
+            elif scope_info['type'] == 'interval':
+                return Intervals(result_df, 
+                                 id_field=ID_FIELD,
+                                type_field='concept_id',
+                                start_time_field='starttime',
+                                end_time_field='endtime',
+                                value_field=value_field)
     
-    def extract_data(self, query):
-        data_elements = self.read_from_tempo(query)
-        data_formats = self.extract_data_format(data_elements)
-        result = []
-        for data_format in data_formats:
-            result.append(self.extract_data_from_one_data_element(data_format))
-        return result
-    
-    # TODO UPDATE
-    
-                
     def get_min_times(self):
         """
         Returns an Attributes where the value for each ID is the earliest timestamp
         for that trajectory ID in the dataset.
         """
-        event_times = np.concatenate([event_set.get_times() for event_set in self.events] if self.events else [np.array([])])
-        event_ids = np.concatenate([event_set.get_ids() for event_set in self.events] if self.events else [np.array([])])
-        event_mins = pd.Series(event_times, name='times').groupby(event_ids).agg("min")
+        with self.engine.connect() as conn:
+            all_times = union(
+                *(select(
+                    self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
+                    self.metadata.tables[scope_info['table_name']].c[scope_info['start_time_field']].label('mintime')
+                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'interval'),
+                *(select(
+                    self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
+                    self.metadata.tables[scope_info['table_name']].c[scope_info['time_field']].label('mintime')
+                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'event')
+            ).cte('all_times')
+            stmt = select(all_times.c[ID_FIELD], func.min(all_times.c.mintime).label('mintime')).group_by(all_times.c[ID_FIELD])
+            result = conn.execute(stmt)
+            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            return Attributes(result_df.set_index(ID_FIELD)['mintime'])
         
-        interval_times = np.concatenate([interval_set.get_start_times() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_ids = np.concatenate([interval_set.get_ids() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_mins = pd.Series(interval_times, name='times').groupby(interval_ids).agg("min")
-
-        ids = self.get_ids()
-        all_mins = pd.merge(pd.Series(ids, name="id"), pd.merge(event_mins, interval_mins, how='outer', left_index=True, right_index=True), left_on="id", right_index=True).set_index("id").min(axis=1)
-        return Attributes(all_mins.rename("mintime"))
-
     def get_max_times(self):
         """
         Returns an Attributes where the value for each ID is the latest timestamp
-        for that trajectory ID in the dataset. The max time should be exclusive,
-        i.e. slightly greater than the latest timestamp.
+        for that trajectory ID in the dataset.
         """
-        event_times = np.concatenate([event_set.get_times() for event_set in self.events] if self.events else [np.array([])])
-        event_ids = np.concatenate([event_set.get_ids() for event_set in self.events] if self.events else [np.array([])])
-        event_maxes = pd.Series(event_times, name='times').groupby(event_ids).agg("max")
-        
-        interval_times = np.concatenate([interval_set.get_end_times() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_ids = np.concatenate([interval_set.get_ids() for interval_set in self.intervals] if self.intervals else [np.array([])])
-        interval_maxes = pd.Series(interval_times, name='times').groupby(interval_ids).agg("max")
-
-        ids = self.get_ids()
-        all_maxes = pd.merge(pd.Series(ids, name="id"), pd.merge(event_maxes, interval_maxes, how='outer', left_index=True, right_index=True), left_on="id", right_index=True).set_index("id").max(axis=1)
-        # Offset the time by 1 so that it includes all events and intervals
-        if pd.api.types.is_datetime64_any_dtype(all_maxes.dtype):
-            all_maxes += datetime.timedelta(seconds=1)
-        else:
-            all_maxes += 1
-        self._maxtimes = Attributes(all_maxes.rename("maxtime"))
+        with self.engine.connect() as conn:
+            all_times = union(
+                *(select(
+                    self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
+                    self.metadata.tables[scope_info['table_name']].c[scope_info['end_time_field']].label('maxtime')
+                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'interval'),
+                *(select(
+                    self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
+                    self.metadata.tables[scope_info['table_name']].c[scope_info['time_field']].label('maxtime')
+                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'event')
+            ).cte('all_times')
+            stmt = select(all_times.c[ID_FIELD], (func.max(all_times.c.maxtime) + datetime.timedelta(seconds=1)).label('maxtime')).group_by(all_times.c[ID_FIELD])
+            # print(stmt.compile(compile_kwargs={"literal_binds": True}))
+            result = conn.execute(stmt)
+            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            return Attributes(result_df.set_index(ID_FIELD)['maxtime'])
         
     def get_data_element(
         self,
@@ -195,7 +297,9 @@ class OMOPDataset:
         concept_name_query=None,
         value_field=None):
         """
-        :param scope: Scope is not supported for original Tempo datasets.
+        :param scope: The scope in the dataset in which to search for 
+            matching concepts, or None to search all scopes. Returned data
+            is only allowed to match one scope.
         :param data_type: The type of the data that should be returned, or
             None to search all data types. Returned data is only allowed to
             be of one type.
@@ -221,6 +325,8 @@ class OMOPDataset:
         """
         if (concept_name_query is None) == (concept_id_query is None):
             raise ValueError("Exactly one of id and name must be specified")
+        if value_field is not None and scope is None:
+            raise ValueError("Specifying value field requires scope to also be provided")
         
         if data_type is not None:
             if data_type == "attribute" and isinstance(concept_name_query, list): raise ValueError(f"Cannot jointly retrieve multiple data elements from Attributes")
@@ -228,25 +334,28 @@ class OMOPDataset:
         else:
             data_type = None
             
-        candidates = []
-        if (data_type is None or data_type == "attribute") and not isinstance(concept_name_query, list):
-            for attr_set in self.attributes:
-                matching_names = self._matching_concept_names(concept_name_query, attr_set.get_names())
-                if matching_names: candidates.append(attr_set.get(matching_names[0]))
-        if data_type is None or data_type == "event":
-            for event_set in self.events:
-                matching_names = self._matching_concept_names(concept_name_query, event_set.get_unique_types())
-                if matching_names: candidates.append(event_set.get(matching_names))
-        if data_type is None or data_type == "interval":
-            for interval_set in self.intervals:
-                matching_names = self._matching_concept_names(concept_name_query, interval_set.get_unique_types())
-                if matching_names: candidates.append(interval_set.get(matching_names))
+        if (data_type is None or data_type == "attribute") and concept_name_query is not None:
+            # Check if the concept name query matches a predefined attribute
+            attr = self.attempt_attribute_extract(concept_name_query)
+            if attr:
+                return attr
+            
+        matching_concepts = self.search_omop_concept_id(concept_id_query=concept_id_query,
+                                                        concept_name_query=concept_name_query)
+        if scope is not None:
+            if scope not in matching_concepts:
+                raise ValueError(f"No concepts match query for scope {scope}")
+            matching_concepts = {scope: matching_concepts[scope]}
+            
+        print("Matching concepts:", matching_concepts)
+        
+        candidates = [self.extract_data_for_concepts(scope, concepts, value_field=value_field)
+                      for scope, concepts in matching_concepts.items()]
+        print("Candidates:", candidates)
+        num_existing = sum(len(c) > 0 for c in candidates)
+        if num_existing > 1:
+            raise ValueError(f"Multiple data elements found matching query {concept_name_query or concept_id_query}. Try specifying a data type or scope.")
+        elif num_existing == 0:
+            raise KeyError(f"No data element found matching query {concept_name_query or concept_id_query}")
 
-        candidates = [c for c in candidates if len(c) > 0]
-        if len(candidates) > 1:
-            raise ValueError(f"Multiple data elements found matching query {concept_name_query}. Try specifying a data type.")
-        elif len(candidates) == 0:
-            raise KeyError(f"No data element found matching query {concept_name_query}")
-        return candidates[0]
-
- 
+        return next(c for c in candidates if len(c) > 0)

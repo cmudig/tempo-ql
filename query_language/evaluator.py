@@ -170,7 +170,7 @@ class EvaluateExpression(lark.visitors.Transformer):
     def data_element_eq(self, args):
         if args[0].lower() not in ("id", "name", "type", "scope", "value"):
             raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
-        return {args[0].lower(): ("equals", self._parse_literal(args[1]) if args[1].type == "LITERAL" else args[1].value)}
+        return {args[0].lower(): ("equals", self._parse_literal(args[1]) if args[1].type in ("LITERAL", "QUOTED_STRING", "SIGNED_NUMBER") else args[1].value)}
     
     def data_element_in(self, args):
         if args[0].lower() not in ("id", "name", "type", "scope", "value"):
@@ -194,7 +194,7 @@ class EvaluateExpression(lark.visitors.Transformer):
             requested_type = DATA_TYPE_COALESCE[requested_type]
             
         value = self.dataset.get_data_element(
-            scope=args[0].get("scope", None),
+            scope=args[0].get("scope", (None, None))[1],
             data_type=requested_type,
             concept_id_query=args[0].get("id", None),
             concept_name_query=args[0].get("name", None),

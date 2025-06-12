@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import random
+import datetime
 from .numba_functions import *
 from numba.typed import List
 from numba import njit, jit
@@ -444,7 +445,7 @@ class Compilable:
 class Attributes(TimeSeriesQueryable):
     def __init__(self, series):
         """The series' index should be the set of instance IDs"""
-        self.series = series
+        self.series = series.sort_index(kind='stable')
         self.name = self.series.name
         
     def __repr__(self):
@@ -512,7 +513,11 @@ class Attributes(TimeSeriesQueryable):
         if isinstance(other, Attributes):
             return Attributes(self.preserve_nans(getattr(self.series, opname)(other.series).rename(self.name)))
         if isinstance(other, Duration):
-            return Attributes(self.preserve_nans(getattr(self.series, opname)(other.value()).rename(self.name)))
+            if pd.api.types.is_datetime64_any_dtype(self.series.dtype):
+                duration = datetime.timedelta(seconds=other.value())
+            else:
+                duration = other.value()
+            return Attributes(self.preserve_nans(getattr(self.series, opname)(duration).rename(self.name)))
         return Attributes(self.preserve_nans(getattr(self.series, opname)(other)))
         
     def __eq__(self, other): return self._handle_binary_op("__eq__", other)
@@ -583,7 +588,7 @@ class AttributeSet(TimeSeriesQueryable):
     
 class Events(TimeSeriesQueryable):
     def __init__(self, df, type_field="eventtype", time_field="time", value_field="value", id_field="id", name=None):
-        self.df = df
+        self.df = df.sort_values([id_field, time_field], kind='stable')
         self.type_field = type_field
         self.time_field = time_field
         self.id_field = id_field
@@ -596,7 +601,7 @@ class Events(TimeSeriesQueryable):
                 self.df = self.df.assign(**{self.value_field: new_values})
             
         if name is None:
-            self.name = ', '.join(self.event_types)
+            self.name = ', '.join(str(x) for x in self.event_types)
         else:
             self.name = name
         
@@ -673,7 +678,11 @@ class Events(TimeSeriesQueryable):
         
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
-        event_times = self.df[self.time_field].astype(np.float64)
+        if pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype):
+            event_times = (self.df[self.time_field].astype(int)/ 10**9).astype(np.float64)
+        else:
+            event_times = self.df[self.time_field].astype(np.float64)
+
         event_values = self.df[self.value_field]
         if convert_to_categorical and (
             isinstance(event_values.dtype, pd.CategoricalDtype) or 
@@ -706,8 +715,18 @@ class Events(TimeSeriesQueryable):
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        starts = np.array(start_times.get_times(), dtype=np.int64)
-        ends = np.array(end_times.get_times(), dtype=np.int64)
+        if (pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype)):
+            starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
+        elif (not pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype)):
+            starts = np.array(start_times.get_times(), dtype=np.int64)
+            ends = np.array(end_times.get_times(), dtype=np.int64)
+        else:
+            raise ValueError("Start times, end times and event times must all be of the same type (either datetime or numeric)")
         assert (starts <= ends).all(), "Start times must be <= end times"
         
         event_ids, event_times, event_values, uniques = self.prepare_aggregation_inputs(agg_func)
@@ -853,7 +872,7 @@ class EventSet(TimeSeriesQueryable):
         
 class Intervals(TimeSeriesQueryable):
     def __init__(self, df, type_field="intervaltype", start_time_field="starttime", end_time_field="endtime", value_field="value", id_field="id", name=None):
-        self.df = df
+        self.df = df.sort_values([id_field, start_time_field], kind='stable')
         self.type_field = type_field
         self.start_time_field = start_time_field
         self.end_time_field = end_time_field
@@ -866,7 +885,7 @@ class Intervals(TimeSeriesQueryable):
             if (pd.isna(new_values) == pd.isna(self.df[self.value_field])).all():
                 self.df = self.df.assign(**{self.value_field: new_values})
         if name is None:
-            self.name = ', '.join(self.event_types)
+            self.name = ', '.join(str(x) for x in self.event_types)
         else:
             self.name = name
 
@@ -981,8 +1000,13 @@ class Intervals(TimeSeriesQueryable):
         
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
-        interval_starts = self.df[self.start_time_field].astype(np.float64)
-        interval_ends = self.df[self.end_time_field].astype(np.float64)
+        if (pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+            interval_starts = (self.df[self.start_time_field].astype(int) / 10**9).astype(np.float64)
+            interval_ends = (self.df[self.end_time_field].astype(int) / 10**9).astype(np.float64)
+        else:
+            interval_starts = self.df[self.start_time_field].astype(np.float64)
+            interval_ends = self.df[self.end_time_field].astype(np.float64)
         interval_values = self.df[self.value_field]
         
         if convert_to_categorical and (
@@ -1018,8 +1042,21 @@ class Intervals(TimeSeriesQueryable):
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        starts = np.array(start_times.get_times(), dtype=np.int64)
-        ends = np.array(end_times.get_times(), dtype=np.int64)
+        if (pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+            starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
+        elif (not pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
+            not pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+            starts = np.array(start_times.get_times(), dtype=np.int64)
+            ends = np.array(end_times.get_times(), dtype=np.int64)
+        else:
+            raise ValueError("Start times, end times and event times must all be of the same type (either datetime or numeric)")
+
         assert (starts <= ends).all(), "Start times must be <= end times"
         
         event_ids, interval_starts, interval_ends, interval_values, uniques = self.prepare_aggregation_inputs(agg_func)
@@ -1348,6 +1385,14 @@ class TimeIndex(TimeSeriesQueryable):
             raise ValueError(f"Starts and ends must match IDs exactly")
         
         combined = pd.DataFrame({starts.id_field: starts.get_ids(), "start": starts.get_times(), "end": ends.get_times()})
+        is_dt = False
+        if pd.api.types.is_datetime64_any_dtype(combined["start"].dtype):
+            combined["start"] = (combined["start"].astype(int)/ 10**9).astype(int)
+            is_dt = True
+        if pd.api.types.is_datetime64_any_dtype(combined["end"].dtype):
+            combined["end"] = (combined["end"].astype(int)/ 10**9).astype(int)
+            is_dt = True
+            
         # remove nan times
         combined = combined.dropna(axis=0)
         start_df = (combined
@@ -1357,6 +1402,8 @@ class TimeIndex(TimeSeriesQueryable):
         # Remove timesteps where no value is present
         start_df = start_df[~pd.isna(start_df[starts.time_field])]
         start_df[starts.time_field] = start_df[starts.time_field].astype(np.int64)
+        if is_dt:
+            start_df[starts.time_field] = pd.to_datetime(start_df[starts.time_field], unit='s', origin='unix')
         return TimeIndex(start_df.reset_index(drop=True), id_field=starts.id_field, time_field=starts.time_field)
         
     def add(self, duration, invert_self=False):

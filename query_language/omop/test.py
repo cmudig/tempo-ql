@@ -1,14 +1,15 @@
 from .dataset import OMOPDataset
-from local_database import LocalOMOPDatabase
+from ..evaluator import QueryEngine
+from .local_database import LocalOMOPDatabase
 
 if __name__ == "__main__":
     # Initialize local database
-    local_db = LocalOMOPDatabase("mimic-iv-demo-data-in-the-omop-common-data-model-0.9/1_omop_data_csv", "omop_database.db")
+    local_db = LocalOMOPDatabase("query_language/omop/mimic-iv-demo-data-in-the-omop-common-data-model-0.9/1_omop_data_csv", "query_language/omop/omop_database.db")
     local_db.setup_database()
     local_db.close()
 
     # Initialize query engine
-    query_engine = OMOPDataset(local_db.get_connection_string())
+    query_engine = QueryEngine(OMOPDataset(local_db.get_connection_string()))
 
     # Example tempo query
 
@@ -32,7 +33,11 @@ if __name__ == "__main__":
     # output2 = query_engine.extract_data(example2)
     # print(output2)
 
+    example1 = "{Gender}"
+    output1 = query_engine.query(example1)
+    print(output1)
+    
     # example 3
-    example3 = "{temperature}"
-    output3 = query_engine.extract_data(example3)
+    example3 = "{name contains /Temperature/; scope = 'Measurement'}"
+    output3 = query_engine.query(example3)
     print(output3)
