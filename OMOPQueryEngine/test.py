@@ -1,5 +1,5 @@
-from OMOPQueryEngine import OMOPTempoQueryEngine
-from LocalDatabase import LocalOMOPDatabase
+from tempo_ql.OMOPQueryEngine.OMOPQueryEngine import OMOPTempoQueryEngine
+from tempo_ql.OMOPQueryEngine.LocalDatabase import LocalOMOPDatabase
 
 if __name__ == "__main__":
     # Initialize local database
