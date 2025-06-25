@@ -1,15 +1,18 @@
 from .dataset import OMOPDataset
 from ..evaluator import QueryEngine
-from .local_database import LocalOMOPDatabase
+from pathlib import Path
+import duckdb
 
 if __name__ == "__main__":
-    # Initialize local database
-    local_db = LocalOMOPDatabase("query_language/omop/mimic-iv-demo-data-in-the-omop-common-data-model-0.9/1_omop_data_csv", "query_language/omop/omop_database.db")
-    local_db.setup_database()
-    local_db.close()
+    # Initialize local database using a named connection so we can refer to it later
+    local_db = duckdb.connect(":memory:myconn")
+    for csv_file in Path('query_language/omop/mimic-iv-demo-data-in-the-omop-common-data-model-0.9/1_omop_data_csv').glob('*.csv'):
+        table_name = csv_file.stem
+        local_db.execute(f"create table {table_name} as select * from read_csv_auto('{csv_file}', header=true, ignore_errors=true, parallel=false)")
+
 
     # Initialize query engine
-    query_engine = QueryEngine(OMOPDataset(local_db.get_connection_string()))
+    query_engine = QueryEngine(OMOPDataset("duckdb:///:memory:myconn"))
 
     # Example tempo query
 
