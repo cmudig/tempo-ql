@@ -4,7 +4,6 @@ import pickle
 import tempfile
 import shutil
 import pandas as pd
-import torch
 from contextlib import contextmanager
 
 BINARY_FILE_TYPES = ('pickle', 'feather', 'bytes', 'pytorch')
@@ -87,6 +86,7 @@ class LocalFilesystem:
             elif format.lower() == 'feather':
                 return pd.read_feather(file, **kwargs)
             elif format.lower() == 'pytorch':
+                import torch
                 return torch.load(file, **kwargs)
             raise ValueError(f"Unsupported format {format}")
         
@@ -113,6 +113,7 @@ class LocalFilesystem:
             elif format.lower() == 'feather':
                 content.to_feather(file, **kwargs)
             elif format.lower() == 'pytorch':
+                import torch
                 torch.save(content, file)
             else:
                 raise ValueError(f"Unsupported format {format}")

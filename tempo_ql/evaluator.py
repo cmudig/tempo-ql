@@ -8,7 +8,7 @@ import os
 import logging
 import random
 import tqdm
-from divisi.utils import convert_to_native_types
+from .utils import convert_to_native_types
 from .filesystem import LocalFilesystem
 
 GRAMMAR = """
