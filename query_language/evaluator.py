@@ -515,7 +515,7 @@ class EvaluateExpression(lark.visitors.Transformer):
         function_name = args[0].value.lower()
         operands = args[1:]
         if function_name in ("time", "starttime", "endtime"):
-            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one operand")
+            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             if function_name == "time":
                 if isinstance(operands[0], Compilable):
                     return operands[0].time()
@@ -535,11 +535,11 @@ class EvaluateExpression(lark.visitors.Transformer):
                     raise ValueError("endtime function requires interval objects")
                 return operands[0].end_events().with_values(operands[0].get_end_times())
         elif function_name in ("duration",):
-            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one operand")
+            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             return (operands[0].end_events().with_values(operands[0].get_end_times())
                     - operands[0].start_events().with_values(operands[0].get_start_times()))
         elif function_name in ("start", "end"):
-            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one operand")
+            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             if function_name == "start":
                 if isinstance(operands[0], Compilable):
                     return operands[0].start()
@@ -553,10 +553,10 @@ class EvaluateExpression(lark.visitors.Transformer):
                     raise ValueError("end function requires interval objects")
                 return operands[0].end_events()
         elif function_name in ("abs", ):
-            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one operand")
+            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             return getattr(operands[0], function_name)()
         elif function_name in ("max", "min"):
-            if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two operands")
+            if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
             numpy_func = np.maximum if function_name == "max" else np.minimum
             return self._perform_binary_numpy_function(operands, function_name, numpy_func)
         elif function_name in ("extract", ):
@@ -566,11 +566,48 @@ class EvaluateExpression(lark.visitors.Transformer):
                 pattern = re.compile("(" + pattern.pattern + ")", flags=pattern.flags)
             return operands[0].with_values(operands[0].get_values().str.extract(pattern)[operands[2] if len(operands) > 2 else 0])
         elif function_name == "shift":
-            if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two operands")
+            if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
             return operands[0].shift(operands[1])
         elif function_name in ("previous", "next"):
-            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly two operands")
+            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly two arguments")
             return operands[0].shift(1 if function_name == "next" else -1)
+        elif function_name == "union":
+            # Combine the given Events or Intervals together
+            if len(operands) <= 1: raise ValueError(f"{function_name} function requires at least two arguments")
+            if isinstance(operands[0], Events):
+                if not all(isinstance(o, Events) for o in operands): raise ValueError(f"All arguments to {function_name} must be of the same type")
+                base = operands[0]
+                return Events(pd.concat([e.df.rename(columns={
+                    e.id_field: base.id_field,
+                    e.time_field: base.time_field,
+                    e.type_field: base.type_field,
+                    e.value_field: base.value_field,
+                }) for e in operands], axis=0), 
+                              id_field=base.id_field,
+                              time_field=base.time_field,
+                              type_field=base.type_field,
+                              value_field=base.value_field)
+            elif isinstance(operands[0], Intervals):
+                if not all(isinstance(o, Intervals) for o in operands): raise ValueError(f"All arguments to {function_name} must be of the same type")
+                base = operands[0]
+                return Intervals(pd.concat([e.df.rename(columns={
+                    e.id_field: base.id_field,
+                    e.start_time_field: base.start_time_field,
+                    e.end_time_field: base.end_time_field,
+                    e.type_field: base.type_field,
+                    e.value_field: base.value_field,
+                }) for e in operands], axis=0), 
+                              id_field=base.id_field,
+                              start_time_field=base.start_time_field,
+                              end_time_field=base.end_time_field,
+                              type_field=base.type_field,
+                              value_field=base.value_field)
+            raise ValueError(f"Unsupported type {operands[0]} in argument to {function_name}")
+        elif function_name == "intervals":
+            if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
+            if not isinstance(operands[0], Events) or not isinstance(operands[1], Events):
+                raise ValueError(f"Both arguments to {function_name} function must be Events")
+            return Intervals.from_events(*operands)
         else:
             raise ValueError(f"Unknown function '{function_name}'")
 

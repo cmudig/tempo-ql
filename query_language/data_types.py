@@ -955,6 +955,28 @@ class Intervals(TimeSeriesQueryable):
                       value_field=self.value_field,
                       id_field=self.id_field,
                       name=self.name)
+
+    @staticmethod        
+    def from_events(starts, ends):
+        merged_df = pd.merge_asof(starts.df.rename(columns={
+                                        starts.time_field: "starttime",
+                                        starts.type_field: "type",
+                                        starts.value_field: "value",
+                                    }).sort_values("starttime", kind='stable'), 
+                                  ends.df.rename(columns={
+                                        ends.time_field: "endtime",
+                                        ends.value_field: "value",
+                                        ends.id_field: starts.id_field
+                                    }).sort_values("endtime", kind='stable'), 
+                                  left_on='starttime', 
+                                  right_on='endtime', 
+                                  direction='forward',
+                                  by=starts.id_field)
+        merged_df["value"] = merged_df["value_x"].where(~pd.isna(merged_df["value_x"]), merged_df["value_y"])
+        return Intervals(merged_df[~pd.isna(merged_df["endtime"])][[starts.id_field, "starttime", "endtime", "type", "value"]],
+                         id_field=starts.id_field,
+                         type_field="type",
+                         value_field="value")
         
     def compress(self):
         """Returns a new TimeSeries with values compressed to the minimum size

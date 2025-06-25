@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import re
 import datetime
+from copy import deepcopy
 from ..data_types import *
 
 ID_FIELD = 'person_id'
@@ -79,12 +80,14 @@ ATTRIBUTES = {
 }
 
 class OMOPDataset:
-    def __init__(self, connection_string):
+    def __init__(self, connection_string, id_field=ID_FIELD, scopes=SCOPE_INFO, attributes=ATTRIBUTES):
         self.engine = create_engine(connection_string)
         self.metadata = MetaData()
         self.connection = self.engine.connect()
         self.metadata.reflect(bind=self.connection)
-        self.candidate_names = ['Heart Rate', 'Respiratory Rate', 'Breath Rate', 'Oxygen Saturation', 'Blood Pressure']
+        self.id_field = id_field
+        self.scopes = deepcopy(scopes)
+        self.attributes = deepcopy(attributes)
 
     def _make_concept_filters(self, column, query):
         query_type, query_data = query
@@ -153,10 +156,10 @@ class OMOPDataset:
         if query_type != "equals":
             return
         
-        if query_data not in ATTRIBUTES:
+        if query_data not in self.attributes:
             return
         
-        attr_info = ATTRIBUTES[query_data]
+        attr_info = self.attributes[query_data]
         table = attr_info['table_name']
         with self.engine.connect() as conn:
             if attr_info.get('convert_concept', False):
@@ -197,7 +200,7 @@ class OMOPDataset:
         Returns: an Attributes, Events, or Intervals object representing the 
             data for the given set of concepts.
         """
-        scope_info = SCOPE_INFO[scope]
+        scope_info = self.scopes[scope]
         table = self.metadata.tables[scope_info['table_name']]
         if value_field is not None:
             if value_field not in table.c:
@@ -229,6 +232,9 @@ class OMOPDataset:
             stmt = select(*table_fields).where(table.c[scope_info['concept_id_field']].in_([c[0] for c in concepts]))
             result = conn.execute(stmt)
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            if value_field is None:
+                result_df["value"] = pd.NA
+                value_field = "value"
             
             if scope_info['type'] == 'attribute':
                 return Attributes(result_df.set_index(ID_FIELD)[value_field])
@@ -256,11 +262,11 @@ class OMOPDataset:
                 *(select(
                     self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
                     self.metadata.tables[scope_info['table_name']].c[scope_info['start_time_field']].label('mintime')
-                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'interval'),
+                ) for scope_info in self.scopes.values() if scope_info['type'] == 'interval'),
                 *(select(
                     self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
                     self.metadata.tables[scope_info['table_name']].c[scope_info['time_field']].label('mintime')
-                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'event')
+                ) for scope_info in self.scopes.values() if scope_info['type'] == 'event')
             ).cte('all_times')
             stmt = select(all_times.c[ID_FIELD], func.min(all_times.c.mintime).label('mintime')).group_by(all_times.c[ID_FIELD])
             result = conn.execute(stmt)
@@ -277,11 +283,11 @@ class OMOPDataset:
                 *(select(
                     self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
                     self.metadata.tables[scope_info['table_name']].c[scope_info['end_time_field']].label('maxtime')
-                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'interval'),
+                ) for scope_info in self.scopes.values() if scope_info['type'] == 'interval'),
                 *(select(
                     self.metadata.tables[scope_info['table_name']].c[ID_FIELD],
                     self.metadata.tables[scope_info['table_name']].c[scope_info['time_field']].label('maxtime')
-                ) for scope_info in SCOPE_INFO.values() if scope_info['type'] == 'event')
+                ) for scope_info in self.scopes.values() if scope_info['type'] == 'event')
             ).cte('all_times')
             stmt = select(all_times.c[ID_FIELD], (func.max(all_times.c.maxtime) + datetime.timedelta(seconds=1)).label('maxtime')).group_by(all_times.c[ID_FIELD])
             # print(stmt.compile(compile_kwargs={"literal_binds": True}))
@@ -351,7 +357,6 @@ class OMOPDataset:
         
         candidates = [self.extract_data_for_concepts(scope, concepts, value_field=value_field)
                       for scope, concepts in matching_concepts.items()]
-        print("Candidates:", candidates)
         num_existing = sum(len(c) > 0 for c in candidates)
         if num_existing > 1:
             raise ValueError(f"Multiple data elements found matching query {concept_name_query or concept_id_query}. Try specifying a data type or scope.")
