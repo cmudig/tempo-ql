@@ -19,6 +19,8 @@ def make_aligned_value_series(value_set, other):
             raise ValueError(f"Event sets must be same length")
         return other.get_values()
     elif isinstance(other, Duration):
+        if pd.api.types.is_datetime64_any_dtype(value_set.get_values().dtype):
+            return datetime.timedelta(seconds=other.value())
         return other.value()
     elif isinstance(other, pd.DataFrame):
         raise ValueError("Can't perform binary operations on Events with a DataFrame")

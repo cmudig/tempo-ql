@@ -11,7 +11,7 @@ from ..data_types import *
 ID_FIELD = 'person_id'
 
 SCOPE_INFO = {
-    'Drug': {
+    'drug': {
         'table_name': 'drug_exposure', 
         'concept_id_field': 'drug_source_concept_id',
         'type': 'interval',
@@ -19,34 +19,34 @@ SCOPE_INFO = {
         'end_time_field': 'drug_exposure_end_datetime',
         'default_value_field': 'quantity'
     },
-    'Condition': {
+    'condition': {
         'table_name': 'condition_occurrence', 
         'concept_id_field': 'condition_source_concept_id',
         'start_time_field': 'condition_start_datetime',
         'end_time_field': 'condition_end_datetime',
         'type': 'interval',
     },
-    'Procedure': {
+    'procedure': {
         'table_name': 'procedure_occurrence', 
         'concept_id_field': 'procedure_source_concept_id',
         'time_field': 'procedure_datetime',
         'type': 'event'
     },
-    'Observation': {
+    'observation': {
         'table_name': 'observation', 
         'concept_id_field': 'observation_source_concept_id',
         'type': 'event',
         'default_value_field': 'value_as_string',
         'time_field': 'observation_datetime',
     },
-    'Measurement': {
+    'measurement': {
         'table_name': 'measurement', 
         'concept_id_field': 'measurement_source_concept_id',
         'type': 'event',
         'default_value_field': 'value_as_number',
         'time_field': 'measurement_datetime',
     },
-    'Device': {
+    'device': {
         'table_name': 'device_exposure', 
         'concept_id_field': 'device_source_concept_id',
         'type': 'interval',
@@ -86,7 +86,7 @@ class OMOPDataset:
         self.connection = self.engine.connect()
         self.metadata.reflect(bind=self.connection)
         self.id_field = id_field
-        self.scopes = deepcopy(scopes)
+        self.scopes = {k.lower(): deepcopy(v) for k, v in scopes.items()}
         self.attributes = deepcopy(attributes)
 
     def _make_concept_filters(self, column, query):
@@ -97,8 +97,8 @@ class OMOPDataset:
             filters = [column.in_(query_data)]
         elif query_type in ("contains", "matches", "startswith", "endswith"):
             if isinstance(query_data, re.Pattern):
-                pattern_string = query_data.pattern
                 flags = query_data.flags
+                pattern_string = query_data.pattern.lower() if flags & re.I else query_data.pattern
             else:
                 pattern_string = re.escape(query_data)
                 flags = re.NOFLAG
@@ -110,7 +110,10 @@ class OMOPDataset:
                 pattern_string = ".*" + pattern_string + "$"
             else:
                 pattern_string = ".*" + pattern_string + ".*"
-            filters = [column.regexp_match(pattern_string, flags='i' if flags & re.I else None)]
+            if flags & re.I:    
+                filters = [func.lower(column).regexp_match(pattern_string)]
+            else:
+                filters = [column.regexp_match(pattern_string)]
         return filters
         
     def search_omop_concept_id(self, concept_id_query=None, concept_name_query=None):
@@ -144,7 +147,7 @@ class OMOPDataset:
             result = conn.execute(stmt).fetchall()
             scopes = {}
             for row in result:
-                scopes.setdefault(row[-1], []).append(tuple(row[:2]))
+                scopes.setdefault(row[-1].lower(), []).append(tuple(row[:2]))
             return scopes
         
     def attempt_attribute_extract(self, concept_name_query):
@@ -349,6 +352,7 @@ class OMOPDataset:
         matching_concepts = self.search_omop_concept_id(concept_id_query=concept_id_query,
                                                         concept_name_query=concept_name_query)
         if scope is not None:
+            scope = scope.lower()
             if scope not in matching_concepts:
                 raise ValueError(f"No concepts match query for scope {scope}")
             matching_concepts = {scope: matching_concepts[scope]}
