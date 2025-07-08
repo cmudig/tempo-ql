@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, MetaData, Table, select, or_, case, union, func
+from sqlalchemy import create_engine, MetaData, Table, select, or_, case, union, func, cast, String
 from sqlalchemy.types import Interval
 from sqlalchemy.orm import sessionmaker, Session
 import pandas as pd
@@ -173,7 +173,10 @@ class OMOPDataset:
                     case(
                         (self.metadata.tables['concept'].c.concept_name != None,
                          self.metadata.tables['concept'].c.concept_name),
-                        else_=self.metadata.tables[table].c[attr_info['value_field']]
+                        else_=cast(
+                            self.metadata.tables[table].c[attr_info['value_field']],
+                            String
+                        )
                     ).label(attr_info['value_field'])
                 ).select_from(self.metadata.tables[table].join(
                     self.metadata.tables['concept'], 
