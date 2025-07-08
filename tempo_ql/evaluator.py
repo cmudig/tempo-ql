@@ -106,7 +106,7 @@ UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 
 ?data_element_query: "{" data_element_query_el (";" data_element_query_el)* "}" -> data_element_query_list
     | DATA_NAME                     -> data_element_query_basic
-?data_element_query_el: VAR_NAME ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME)   -> data_element_eq
+?data_element_query_el: VAR_NAME ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
     | VAR_NAME ("IN"i) value_list                       -> data_element_in
     | VAR_NAME PATTERN_CMD LITERAL -> data_element_pattern
     
@@ -134,7 +134,7 @@ DATA_TYPE_COALESCE = {
 }
 
 class EvaluateExpression(lark.visitors.Transformer):
-    def __init__(self, dataset, eventtype_macros=None):
+    def __init__(self, dataset, eventtype_macros=None, variable_stores=None):
         super().__init__()
         self.dataset = dataset
         self.time_index = None
@@ -142,6 +142,7 @@ class EvaluateExpression(lark.visitors.Transformer):
         self.value_placeholder = None
         self.index_value_placeholder = None
         self.variables = {}
+        self.variable_stores = variable_stores # external storage of variables
         self._all_ids = None
         self._mintimes = None
         self._maxtimes = None
@@ -204,8 +205,14 @@ class EvaluateExpression(lark.visitors.Transformer):
         return value
         
     def var_name(self, args):
+        # first process local variables
         if args[0] in self.variables:
             return self.variables[args[0]]
+        # then process external variables in order
+        if self.variable_stores is not None:
+            for store in self.variable_stores:
+                print("Checking store", store, args[0])
+                if args[0] in store: return store[args[0]]
         raise KeyError(f"No variable named {args[0]}")
         
     def time_quantity(self, args):
@@ -605,6 +612,9 @@ class EvaluateExpression(lark.visitors.Transformer):
             raise ValueError(f"Unsupported type {operands[0]} in argument to {function_name}")
         elif function_name == "intervals":
             if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
+            operands = [Events(operand.series.rename('time').reset_index().assign(eventtype=operand.name, value=None),
+                               id_field=operand.series.index.name)
+                        for operand in operands if isinstance(operand, Attributes)]
             if not isinstance(operands[0], Events) or not isinstance(operands[1], Events):
                 raise ValueError(f"Both arguments to {function_name} function must be Events")
             return Intervals.from_events(*operands)
@@ -637,11 +647,12 @@ class EvaluateExpression(lark.visitors.Transformer):
         
 
 class EvaluateQuery(lark.visitors.Interpreter):
-    def __init__(self, dataset, variable_transform=None, eventtype_macros=None, cache=None, verbose=False, update_fn=None):
+    def __init__(self, dataset, variable_transform=None, eventtype_macros=None, variable_stores=None, cache=None, verbose=False, update_fn=None):
         super().__init__()
         self.dataset = dataset
         self.cache = cache
         self.eventtype_macros = eventtype_macros if eventtype_macros is not None else {}
+        self.variable_stores = variable_stores
         self.update_fn = update_fn
         # If provided, this should be a tuple of (description, transform_fn, restore_fn). The
         # description should be a string uniquely identifying this transform,
@@ -659,7 +670,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             self.variable_transform = None
             self.variable_restore = None
         self.verbose = verbose
-        self.evaluator = EvaluateExpression(self.dataset, self.eventtype_macros)
+        self.evaluator = EvaluateExpression(self.dataset, self.eventtype_macros, variable_stores=self.variable_stores)
         
     def get_all_ids(self):
         return self.evaluator.get_all_ids()
@@ -980,11 +991,15 @@ class QueryResultCache:
 
     
 class QueryEngine:
-    def __init__(self, dataset, eventtype_macros=None, cache_fs=None):
+    def __init__(self, dataset, eventtype_macros=None, cache_fs=None, variable_stores=None):
+        """
+        variable_stores can be a list of dictionary-like objects that store variables.
+        """
         super().__init__()
         self.dataset = dataset
         self.parser = lark.Lark(GRAMMAR, parser="earley")
         self.eventtype_macros = eventtype_macros
+        self.variable_stores = variable_stores
         if cache_fs is not None: self.cache = QueryResultCache(cache_fs)
         else: self.cache = None
         
@@ -995,6 +1010,7 @@ class QueryEngine:
         query_evaluator = EvaluateQuery(self.dataset, 
                                         eventtype_macros=self.eventtype_macros, 
                                         variable_transform=variable_transform,
+                                        variable_stores=self.variable_stores,
                                         cache=self.cache if use_cache else None, 
                                         update_fn=update_fn,
                                         verbose=True)
