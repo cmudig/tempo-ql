@@ -5,6 +5,7 @@ import datetime
 from .data_types import *
 import json
 import os
+import uuid
 import logging
 import random
 import tqdm
@@ -105,10 +106,10 @@ step_quantity: LITERAL /steps?/i
 UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 
 ?data_element_query: "{" data_element_query_el (";" data_element_query_el)* "}" -> data_element_query_list
-    | DATA_NAME                     -> data_element_query_basic
-?data_element_query_el: VAR_NAME ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
-    | VAR_NAME ("IN"i) value_list                       -> data_element_in
-    | VAR_NAME PATTERN_CMD LITERAL -> data_element_pattern
+?data_element_query_el: /id|name|type|value|scope/i ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
+    | /id|name|type|value|scope/i ("IN"i) value_list                       -> data_element_in
+    | /id|name|type|value|scope/i PATTERN_CMD LITERAL -> data_element_pattern
+    | /[^};'"`]+/i -> data_element_query_basic
     
 PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
 DATA_NAME: /\{[^}]*\}/
@@ -153,8 +154,7 @@ class EvaluateExpression(lark.visitors.Transformer):
         return self._all_ids
         
     def data_element_query_basic(self, args):
-        match = re.match(r"\{([^\}]+)\}", args[0], flags=re.I)
-        query = match.group(1)
+        query = args[0]
         if query in self.eventtype_macros:
             query = self.eventtype_macros[query].strip()
         if "," in query:
@@ -194,12 +194,32 @@ class EvaluateExpression(lark.visitors.Transformer):
                 raise ValueError(f"Unknown data type '{requested_type}'; must be attribute, event, interval, or similar")
             requested_type = DATA_TYPE_COALESCE[requested_type]
             
+        if requested_type is not None and not args[0].get("id", None) and not args[0].get("name", None):
+            # empty element of the given type
+            if requested_type == "attribute":
+                return Attributes(pd.Series([], dtype=float, name=f"{uuid.uuid4()}"))
+            elif requested_type == "event":
+                return Events(pd.DataFrame({
+                    'id': pd.Series([], dtype=int),
+                    'time': pd.Series([], dtype=int),
+                    'eventtype': pd.Series([], dtype=str),
+                    'value': pd.Series([], dtype=float)
+                }))
+            elif requested_type == "interval":
+                return Intervals(pd.DataFrame({
+                    'id': pd.Series([], dtype=int),
+                    'starttime': pd.Series([], dtype=int),
+                    'endtime': pd.Series([], dtype=int),
+                    'intervaltype': pd.Series([], dtype=str),
+                    'value': pd.Series([], dtype=float)
+                }))
+                            
         value = self.dataset.get_data_element(
             scope=args[0].get("scope", (None, None))[1],
             data_type=requested_type,
             concept_id_query=args[0].get("id", None),
             concept_name_query=args[0].get("name", None),
-            value_field=args[0].get("value", None))
+            value_field=args[0].get("value", (None, None))[1])
         if len(args) > 1 and args[1]:
             value /= Duration(1, args[1])
         return value
@@ -572,6 +592,10 @@ class EvaluateExpression(lark.visitors.Transformer):
             if isinstance(pattern, re.Pattern) and not pattern.groups:
                 pattern = re.compile("(" + pattern.pattern + ")", flags=pattern.flags)
             return operands[0].with_values(operands[0].get_values().str.extract(pattern)[operands[2] if len(operands) > 2 else 0])
+        elif function_name == "replace":
+            if len(operands) != 3: raise ValueError(f"{function_name} function requires exactly three arguments")
+            pattern = operands[1]
+            return operands[0].with_values(operands[0].get_values().str.replace(pattern, operands[2]))
         elif function_name == "shift":
             if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
             return operands[0].shift(operands[1])
@@ -581,40 +605,16 @@ class EvaluateExpression(lark.visitors.Transformer):
         elif function_name == "union":
             # Combine the given Events or Intervals together
             if len(operands) <= 1: raise ValueError(f"{function_name} function requires at least two arguments")
-            if isinstance(operands[0], Events):
-                if not all(isinstance(o, Events) for o in operands): raise ValueError(f"All arguments to {function_name} must be of the same type")
-                base = operands[0]
-                return Events(pd.concat([e.df.rename(columns={
-                    e.id_field: base.id_field,
-                    e.time_field: base.time_field,
-                    e.type_field: base.type_field,
-                    e.value_field: base.value_field,
-                }) for e in operands], axis=0), 
-                              id_field=base.id_field,
-                              time_field=base.time_field,
-                              type_field=base.type_field,
-                              value_field=base.value_field)
-            elif isinstance(operands[0], Intervals):
-                if not all(isinstance(o, Intervals) for o in operands): raise ValueError(f"All arguments to {function_name} must be of the same type")
-                base = operands[0]
-                return Intervals(pd.concat([e.df.rename(columns={
-                    e.id_field: base.id_field,
-                    e.start_time_field: base.start_time_field,
-                    e.end_time_field: base.end_time_field,
-                    e.type_field: base.type_field,
-                    e.value_field: base.value_field,
-                }) for e in operands], axis=0), 
-                              id_field=base.id_field,
-                              start_time_field=base.start_time_field,
-                              end_time_field=base.end_time_field,
-                              type_field=base.type_field,
-                              value_field=base.value_field)
-            raise ValueError(f"Unsupported type {operands[0]} in argument to {function_name}")
+            base = operands[0]
+            for operand in operands[1:]:
+                base = union_data(base, operand)
+            return base
         elif function_name == "intervals":
             if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
             operands = [Events(operand.series.rename('time').reset_index().assign(eventtype=operand.name, value=None),
                                id_field=operand.series.index.name)
-                        for operand in operands if isinstance(operand, Attributes)]
+                        if isinstance(operand, Attributes) else operand
+                        for operand in operands]
             if not isinstance(operands[0], Events) or not isinstance(operands[1], Events):
                 raise ValueError(f"Both arguments to {function_name} function must be Events")
             return Intervals.from_events(*operands)

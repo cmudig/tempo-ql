@@ -19,9 +19,7 @@ def make_aligned_value_series(value_set, other):
             raise ValueError(f"Event sets must be same length")
         return other.get_values()
     elif isinstance(other, Duration):
-        if pd.api.types.is_datetime64_any_dtype(value_set.get_values().dtype):
-            return datetime.timedelta(seconds=other.value())
-        return other.value()
+        return other.value_like(value_set.get_values())
     elif isinstance(other, pd.DataFrame):
         raise ValueError("Can't perform binary operations on Events with a DataFrame")
     return other
@@ -76,6 +74,58 @@ def get_all_trajectory_ids(attributes, events, intervals):
                 all_ids.append(interval_set.get_ids().values)
     return np.unique(np.concatenate(all_ids))
 
+def union_data(lhs, rhs):
+    """Combine two TimeSeriesQueryable objects together."""
+    # determine consensus dtype for values
+    cast_dtype = None
+    lhs_dtype = lhs.get_values().dtype
+    rhs_dtype = rhs.get_values().dtype
+    if ((pd.api.types.is_object_dtype(lhs_dtype) or 
+         (isinstance(lhs_dtype, pd.CategoricalDtype) and pd.api.types.is_object_dtype(lhs_dtype.categories.dtype))) != 
+        (pd.api.types.is_object_dtype(rhs_dtype) or 
+         (isinstance(rhs_dtype, pd.CategoricalDtype) and pd.api.types.is_object_dtype(rhs_dtype.categories.dtype)))):
+        # try converting all to numeric
+        try:
+            lhs.get_values().astype(float)
+            rhs.get_values().astype(float)
+            cast_dtype = float
+        except:
+            cast_dtype = str
+    
+    if isinstance(lhs, Events):
+        if not isinstance(rhs, Events): raise ValueError(f"All arguments to union must be of the same type")
+        base = lhs
+        result = Events(pd.concat([e.df.rename(columns={
+            e.id_field: base.id_field,
+            e.time_field: base.time_field,
+            e.type_field: base.type_field,
+            e.value_field: base.value_field,
+        }) for e in [lhs, rhs]], axis=0), 
+                        id_field=base.id_field,
+                        time_field=base.time_field,
+                        type_field=base.type_field,
+                        value_field=base.value_field)
+    elif isinstance(lhs, Intervals):
+        if not isinstance(rhs, Intervals): raise ValueError(f"All arguments to union must be of the same type")
+        base = lhs
+        result = Intervals(pd.concat([e.df.rename(columns={
+            e.id_field: base.id_field,
+            e.start_time_field: base.start_time_field,
+            e.end_time_field: base.end_time_field,
+            e.type_field: base.type_field,
+            e.value_field: base.value_field,
+        }) for e in [lhs, rhs]], axis=0), 
+                        id_field=base.id_field,
+                        start_time_field=base.start_time_field,
+                        end_time_field=base.end_time_field,
+                        type_field=base.type_field,
+                        value_field=base.value_field)
+    else:
+        raise ValueError(f"Unsupported type {type(lhs).__name__} in argument to union")
+    if cast_dtype is not None:
+        print("Casting to", cast_dtype)
+        result = result.with_values(result.get_values().astype(cast_dtype))
+    return result
     
 EXCLUDE_SERIES_METHODS = ("_repr_latex_",)
 
@@ -590,7 +640,7 @@ class AttributeSet(TimeSeriesQueryable):
     
 class Events(TimeSeriesQueryable):
     def __init__(self, df, type_field="eventtype", time_field="time", value_field="value", id_field="id", name=None):
-        self.df = df.sort_values([id_field, time_field], kind='stable')
+        self.df = df.sort_values([id_field, time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.time_field = time_field
         self.id_field = id_field
@@ -812,7 +862,7 @@ class Events(TimeSeriesQueryable):
     
 class EventSet(TimeSeriesQueryable):
     def __init__(self, df, type_field="eventtype", time_field="time", id_field="id", value_field="value"):
-        self.df = df.sort_values([id_field, time_field], kind='stable')
+        self.df = df.sort_values([id_field, time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.time_field = time_field
         self.id_field = id_field
@@ -874,7 +924,7 @@ class EventSet(TimeSeriesQueryable):
         
 class Intervals(TimeSeriesQueryable):
     def __init__(self, df, type_field="intervaltype", start_time_field="starttime", end_time_field="endtime", value_field="value", id_field="id", name=None):
-        self.df = df.sort_values([id_field, start_time_field], kind='stable')
+        self.df = df.sort_values([id_field, start_time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.start_time_field = start_time_field
         self.end_time_field = end_time_field
@@ -1156,7 +1206,7 @@ class Intervals(TimeSeriesQueryable):
 
 class IntervalSet(TimeSeriesQueryable):
     def __init__(self, df, type_field="intervaltype", start_time_field="starttime", end_time_field="endtime", value_field="value", id_field="id"):
-        self.df = df.sort_values([id_field, start_time_field], kind='stable')
+        self.df = df.sort_values([id_field, start_time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.start_time_field = start_time_field
         self.end_time_field = end_time_field
@@ -1245,6 +1295,16 @@ class Duration(TimeSeriesQueryable):
     def value(self):
         return self._value
     
+    def value_like(self, reference_type):
+        """Returns a value that can be used for arithmetic with the given object."""
+        if hasattr(reference_type, 'dtype'):
+            if pd.api.types.is_datetime64_any_dtype(reference_type.dtype):
+                return datetime.timedelta(seconds=self.value())
+            return self.value()
+        elif isinstance(reference_type, datetime.timedelta):
+            return datetime.timedelta(seconds=self.value())
+        return self.value()
+    
     def __repr__(self):
         return f"<Duration {self.value()}s>"
     
@@ -1298,7 +1358,7 @@ class TimeIndex(TimeSeriesQueryable):
     def __init__(self, timesteps, id_field="id", time_field="time"):
         """timesteps: a dataframe with instance ID and whose values indicate
             times in the instance's trajectory."""
-        self.timesteps = timesteps.sort_values(id_field, kind='stable')
+        self.timesteps = timesteps.sort_values(id_field, kind='stable').reset_index(drop=True)
         self.time_field = time_field
         self.id_field = id_field
     
@@ -1434,7 +1494,7 @@ class TimeIndex(TimeSeriesQueryable):
         """duration: either a Duration or an Attributes containing durations in
             seconds"""
         if isinstance(duration, Duration):
-            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] + duration.value()}),
+            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] + duration.value_like(self.timesteps[self.time_field])}),
                              id_field=self.id_field,
                              time_field=self.time_field)
         elif isinstance(duration, Attributes):
@@ -1452,7 +1512,7 @@ class TimeIndex(TimeSeriesQueryable):
         """duration: either a Duration or an Attributes containing durations in
             seconds"""
         if isinstance(duration, Duration):
-            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] - duration.value()}),
+            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] - duration.value_like(self.timesteps[self.time_field])}),
                              id_field=self.id_field,
                              time_field=self.time_field)
         elif isinstance(duration, Attributes):
@@ -1544,7 +1604,7 @@ class TimeSeries(TimeSeriesQueryable):
             will not be used.
         """
         self.index = index
-        self.series = series
+        self.series = series.reset_index(drop=True)
         if series.name in self.index.timesteps.columns:
             # The series probably derives from the time index
             self.series = self.series.rename(self.series.name + "_values")

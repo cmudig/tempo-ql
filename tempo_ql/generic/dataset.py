@@ -1,5 +1,5 @@
-from sqlalchemy import create_engine, MetaData, Table, Column, select, or_, case, union, func, distinct, literal, insert
-from sqlalchemy.types import Interval, Integer
+from sqlalchemy import create_engine, MetaData, Table, Column, select, or_, case, union, func, distinct, literal, insert, cast, String, null
+from sqlalchemy.types import Interval, Integer, DateTime
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import NoSuchTableError
 import pandas as pd
@@ -74,18 +74,30 @@ TRAJECTORY_ID_TABLE_NAME = "tempo_trajectory_ids"
 
 
 class GenericDataset:
-    def __init__(self, connection_string, tables, vocabularies, schema_name=None, scratch_schema_name='auto'):
+    def __init__(self, 
+                 connection_string, 
+                 tables, 
+                 vocabularies, 
+                 schema_name=None, 
+                 scratch_schema_name='auto', 
+                 verbose=False,
+                 id_field_transform=None,
+                 time_field_transform=None):
         self.engine = create_engine(connection_string, 
                                     **({"execution_options": {"schema_translate_map": {None: schema_name}}} if schema_name is not None else {}))
         self.metadata = MetaData(schema=schema_name)
         self.scratch_schema_name = schema_name if scratch_schema_name == 'auto' else scratch_schema_name
         self.connection = self.engine.connect()
-        self.metadata.reflect(bind=self.connection)
+        # self.metadata.reflect(bind=self.connection)
         self.tables = deepcopy(tables)
         self.vocabularies = deepcopy(vocabularies)
         self._trajectory_id_table = None # if set, join against this table to limit the trajectory IDs
+        self._load_trajectory_id_table()
         self._local_variables = {} # in the future we could have variables stored as temp tables as well
         if not self.tables: raise ValueError("No tables specified")
+        self.verbose = verbose
+        self.id_field_transform = id_field_transform or (lambda x: x)
+        self.time_field_transform = time_field_transform or (lambda x: x)
         
     def __del__(self):
         if self.connection is not None: self.connection.close()
@@ -103,8 +115,10 @@ class GenericDataset:
         Applies a join to the trajectory table if one is set.
         """
         if self._trajectory_id_table is not None:
+            if self.verbose:
+                print("\tJoining to trajectory ID table")
             return base_table.join(self._trajectory_id_table,
-                                   base_table.c[id_field] == self._trajectory_id_table.c[TRAJECTORY_ID_TABLE_ID_FIELD])
+                                   self.id_field_transform(base_table.c[id_field]) == self._trajectory_id_table.c[TRAJECTORY_ID_TABLE_ID_FIELD])
         return base_table
         
     def search_concept_id(self, concept_id_query=None, concept_name_query=None, scope=None):
@@ -141,6 +155,8 @@ class GenericDataset:
                 if concept_name_query is not None:
                     filters = concept_name_query.filter_db(self._get_table(vocabulary['source']).c[concept_name_field])
                 
+                if self.verbose:
+                    print(f"Searching vocabulary {vocabulary['source']} for id {concept_id_query} and name {concept_name_query}")
                 stmt = select(
                     self._get_table(vocabulary['source']).c[concept_id_field],
                     self._get_table(vocabulary['source']).c[concept_name_field],
@@ -183,11 +199,14 @@ class GenericDataset:
                         ) for vocab in matching_vocabs
                     ))
                     stmt = select(
-                        self._get_table(table_name).c[table_info['id_field']],
+                        self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]),
                         case(
                             (unioned_vocabs.c.concept_name != None,
                             unioned_vocabs.c.concept_name),
-                            else_=self._get_table(table_name).c[attr_info['value_field']]
+                            else_=cast(
+                                self._get_table(table_name).c[attr_info['value_field']],
+                                String
+                            )
                         ).label(attr_info['value_field'])
                     ).distinct().select_from(
                         self._limit_trajectory_ids(
@@ -198,15 +217,18 @@ class GenericDataset:
                             self._get_table(table_name).c[attr_info['value_field']] == unioned_vocabs.c.concept_id,
                             isouter=True
                         ))
+                    if self.verbose:
+                        print(f"Querying table {table_name} for attribute {concept_name_query.query_data} while joining to {len(matching_vocabs)} vocabulary(ies)")
                 else:
                     stmt = select(
-                        self._get_table(table_name).c[table_info['id_field']],
+                        self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]),
                         self._get_table(table_name).c[attr_info['value_field']]
                     ).distinct().select_from(self._limit_trajectory_ids(
                         self._get_table(table_name), 
                         table_info['id_field']
                     ))
-                print("attribute stmt:", stmt)
+                    if self.verbose:
+                        print(f"Querying table {table_name} for attribute {concept_name_query.query_data}")
                 result = conn.execute(stmt)
                 result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                 candidates.append(Attributes(result_df.set_index(table_info['id_field'])[attr_info['value_field']]))
@@ -225,33 +247,42 @@ class GenericDataset:
         
         Returns all candidates that were found.
         """
-        candidates = [] 
+        candidates = {} # indexed by scope
         for table_info in self.tables:
             if scope is not None and ("scope" not in table_info or scope != table_info["scope"]): continue
+            if 'type' not in table_info: continue
+            
             table_name = table_info['source']
+            table_scope = table_info.get('scope', np.random.randint(0, 1e9)) # if no scope provided, make it unique
+            if return_type is not None and return_type != table_info['type']: 
+                continue
+            
             if (('event_type' in table_info or 'event_type_field' in table_info or 'events' in table_info) and
                 not (return_type is not None and return_type != 'event')):
                 if 'events' in table_info:
-                    matching_key = next((k for k in table_info['events'].keys() if name_query.matches_value(k)), None)
-                    if matching_key is None: continue
+                    for matching_key in table_info['events'].keys():
+                        if not name_query.matches_value(matching_key): continue
 
-                    matching_event = table_info['events'][matching_key]
-                    vf = matching_event.get('value_field')
-                    with self.engine.connect() as conn:
-                        # Extract the rows matching query
-                        stmt = select(
-                            self._get_table(table_name).c[table_info['id_field']],
-                            self._get_table(table_name).c[table_info['time_field']],
-                            literal(matching_key).label('eventtype'),
-                            *([self._get_table(table_name).c[vf]] if vf is not None else [literal(None).label('value')])
-                        ).select_from(self._limit_trajectory_ids(
-                            self._get_table(table_name), 
-                            table_info['id_field']
-                        ))
-                        if matching_event.get('filter_nulls', False) and vf is not None:
-                            stmt = stmt.where(self._get_table(table_name).c[vf] is not None)
-                        result = conn.execute(stmt)
-                        result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                        matching_event = table_info['events'][matching_key]
+                        vf = matching_event.get('value_field')
+                        with self.engine.connect() as conn:
+                            # Extract the rows matching query
+                            stmt = select(
+                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['time_field']]).label('time'),
+                                literal(matching_key).label('eventtype'),
+                                *([self._get_table(table_name).c[vf].label('value')] if vf is not None else [null().label('value')])
+                            ).select_from(self._limit_trajectory_ids(
+                                self._get_table(table_name), 
+                                table_info['id_field']
+                            ))
+                            if matching_event.get('filter_nulls', False) and vf is not None:
+                                stmt = stmt.where(self._get_table(table_name).c[vf] != None)
+                            if self.verbose:
+                                print(f"Searching table {table_name} for event named {matching_key}")
+                            result = conn.execute(stmt)
+                            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                        candidates.setdefault(table_scope, []).append(result_df)
                 else:      
                     if 'event_type' in table_info and not name_query.matches_value(table_info['event_type']):
                         continue
@@ -261,59 +292,63 @@ class GenericDataset:
                         if 'event_type' in table_info:
                             # Extract the entire table
                             stmt = select(
-                                self._get_table(table_name).c[table_info['id_field']],
-                                self._get_table(table_name).c[table_info['time_field']],
+                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['time_field']]).label('time'),
                                 literal(table_info['event_type']).label('eventtype'),
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [literal(None).label('value')])
+                                *([self._get_table(table_name).c[vf].label('value')] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
                                 self._get_table(table_name), 
                                 table_info['id_field']
                             ))
+                            if self.verbose:
+                                print(f"Retrieving table {table_name} as event named {table_info['event_type']}")
                         else:
                             # Extract the rows matching query
                             stmt = select(
-                                self._get_table(table_name).c[table_info['id_field']],
-                                self._get_table(table_name).c[table_info['time_field']],
-                                self._get_table(table_name).c[table_info['event_type_field']],
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [literal(None).label('value')])
+                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['time_field']]).label('time'),
+                                self._get_table(table_name).c[table_info['event_type_field']].label('eventtype'),
+                                *([self._get_table(table_name).c[vf].label('value')] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
                                 self._get_table(table_name), 
                                 table_info['id_field']
                             )).where(
                                 or_(*name_query.filter_db(self._get_table(table_name).c[table_info['event_type_field']]))
                             )
+                            if self.verbose:
+                                print(f"Searching table {table_name} for rows where event type field matches {name_query}")
+                        if table_info.get('filter_nulls', False) and vf is not None:
+                            stmt = stmt.where(self._get_table(table_name).c[vf] != None)
                         result = conn.execute(stmt)
-                        result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                if result_df is not None:
-                    candidates.append(Events(result_df, 
-                                            id_field=table_info['id_field'],
-                                            type_field=table_info.get('event_type_field', 'eventtype'),
-                                            time_field=table_info['time_field'],
-                                            value_field='value' if vf is None else vf))
+                        result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
+                        candidates.setdefault(table_scope, []).append(result_df)
             if (('interval_type' in table_info or 'interval_type_field' in table_info or 'intervals' in table_info) and
                 not (return_type is not None and return_type != 'interval')):
                 if 'intervals' in table_info:
-                    matching_key = next((k for k in table_info['intervals'].keys() if name_query.matches_value(k)), None)
-                    if matching_key is None: continue
+                    for matching_key in table_info['intervals'].keys():
+                        if not name_query.matches_value(matching_key): continue
 
-                    matching_event = table_info['intervals'][matching_key]
-                    vf = matching_event.get('value_field')
-                    with self.engine.connect() as conn:
-                        # Extract the rows matching query
-                        stmt = select(
-                            self._get_table(table_name).c[table_info['id_field']],
-                            self._get_table(table_name).c[table_info['start_time_field']],
-                            self._get_table(table_name).c[table_info['end_time_field']],
-                            literal(matching_key).label('intervaltype'),
-                            *([self._get_table(table_name).c[vf]] if vf is not None else [literal(None).label('value')])
-                        ).select_from(self._limit_trajectory_ids(
-                            self._get_table(table_name), 
-                            table_info['id_field']
-                        ))
-                        if matching_event.get('filter_nulls', False) and vf is not None:
-                            stmt = stmt.where(self._get_table(table_name).c[vf] is not None)
-                        result = conn.execute(stmt)
-                        result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                        matching_event = table_info['intervals'][matching_key]
+                        vf = matching_event.get('value_field')
+                        with self.engine.connect() as conn:
+                            # Extract the rows matching query
+                            stmt = select(
+                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['start_time_field']]).label('starttime'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['end_time_field']]).label('endtime'),
+                                literal(matching_key).label('intervaltype'),
+                                *([self._get_table(table_name).c[vf]] if vf is not None else [null().label('value')])
+                            ).select_from(self._limit_trajectory_ids(
+                                self._get_table(table_name), 
+                                table_info['id_field']
+                            ))
+                            if matching_event.get('filter_nulls', False) and vf is not None:
+                                stmt = stmt.where(self._get_table(table_name).c[vf] != None)
+                            if self.verbose:
+                                print(f"Searching table {table_name} for interval named {matching_key}")
+                            result = conn.execute(stmt)
+                            result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
+                            candidates.setdefault(table_scope, []).append(result_df)
                 else:
                     if 'interval_type' in table_info and not name_query.matches_value(table_info['interval_type']):
                         continue
@@ -323,39 +358,112 @@ class GenericDataset:
                         if 'interval_type' in table_info:
                             # Extract the entire table
                             stmt = select(
-                                self._get_table(table_name).c[table_info['id_field']],
-                                self._get_table(table_name).c[table_info['start_time_field']],
-                                self._get_table(table_name).c[table_info['end_time_field']],
+                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['start_time_field']]).label('starttime'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['end_time_field']]).label('endtime'),
                                 literal(table_info['interval_type']).label('intervaltype'),
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [literal(None).label('value')])
+                                *([self._get_table(table_name).c[vf]] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
                                 self._get_table(table_name), 
                                 table_info['id_field']
                             ))
+                            if self.verbose:
+                                print(f"Retrieving table {table_name} as interval named {table_info['interval_type']}")
                         else:
                             # Extract the rows matching query
                             stmt = select(
-                                self._get_table(table_name).c[table_info['id_field']],
-                                self._get_table(table_name).c[table_info['start_time_field']],
-                                self._get_table(table_name).c[table_info['end_time_field']],
+                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['start_time_field']]).label('starttime'),
+                                self.time_field_transform(self._get_table(table_name).c[table_info['end_time_field']]).label('endtime'),
                                 self._get_table(table_name).c[table_info['interval_type_field']],
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [literal(None).label('value')])
+                                *([self._get_table(table_name).c[vf]] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
                                 self._get_table(table_name), 
                                 table_info['id_field']
                             )).where(
                                 or_(*name_query.filter_db(self._get_table(table_name).c[table_info['interval_type_field']]))
                             )
+                            if self.verbose:
+                                print(f"Searching table {table_name} for rows where interval type field matches {name_query}")
+                        if table_info.get('filter_nulls', False) and vf is not None:
+                            stmt = stmt.where(self._get_table(table_name).c[vf] != None)
                         result = conn.execute(stmt)
-                        result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                    if result_df is not None:
-                        candidates.append(Intervals(result_df, 
-                                                id_field=table_info['id_field'],
-                                                type_field=table_info.get('interval_type_field', 'intervaltype'),
-                                                start_time_field=table_info['start_time_field'],
-                                                end_time_field=table_info['end_time_field'],
-                                                value_field='value' if vf is None else vf))
-        return candidates
+                        result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
+                        candidates.setdefault(table_scope, []).append(result_df)
+                        
+            if candidates and return_type is None: return_type = table_info['type']
+        
+        final_candidates = {}
+        for s, scope_cand in candidates.items():
+            if sum(len(r) > 0 for r in scope_cand) == 0: continue
+            if return_type == 'event':
+                final_candidates[s] = Events(pd.concat([r for r in scope_cand if len(r)], ignore_index=True), 
+                                                id_field='id',
+                                                type_field='eventtype',
+                                                time_field='time',
+                                                value_field='value')
+            elif return_type == 'interval':
+                final_candidates[s] = Intervals(pd.concat([r for r in scope_cand if len(r)], ignore_index=True), 
+                                                id_field='id',
+                                                type_field='intervaltype',
+                                                start_time_field='starttime',
+                                                end_time_field='endtime',
+                                                value_field='value' if vf is None else vf)
+        return final_candidates
+        
+    def _base_query_for_table(self, table_info, value_field=None, constant_type=None):
+        """
+        Return a basic SQLAlchemy query to extract the full (applicable) table
+        from the given table info.
+        """
+        if 'events' in table_info and value_field is None:
+            # join all value fields into one big table
+            return union(*(self._base_query_for_table(table_info, value_field=v['value_field'], constant_type=k)
+                           for k, v in table_info['events']))
+        if 'intervals' in table_info and value_field is None:
+            return union(*(self._base_query_for_table(table_info, value_field=v['value_field'], constant_type=k)
+                           for k, v in table_info['intervals']))
+            
+        table = self._get_table(table_info['source'])
+        if table_info['type'] == 'event':
+            table_fields = [self.id_field_transform(table.c[table_info['id_field']]).label('id'), 
+                            self.time_field_transform(table.c[table_info['time_field']]).label('time')]
+            type_field_name = 'eventtype'
+            
+        elif table_info['type'] == 'interval':
+            table_fields = [self.id_field_transform(table.c[table_info['id_field']]).label('id'),
+                            self.time_field_transform(table.c[table_info['start_time_field']]).label('start_time'), 
+                            case((table.c[table_info['end_time_field']] == None, table.c[table_info['start_time_field']]),
+                                 self.time_field_transform(table.c[table_info['end_time_field']])).label('end_time')]
+            type_field_name = 'intervaltype'
+        
+        if constant_type is not None:
+            table_fields.append(literal(constant_type).label(type_field_name))
+        elif 'concept_id_field' in table_info:
+            table_fields.append(table.c[table_info['concept_id_field']].label(type_field_name))
+        elif 'event_type_field' in table_info:    
+            table_fields.append(table.c[table_info['event_type_field']].label(type_field_name))
+        elif 'interval_type_field' in table_info:    
+            table_fields.append(table.c[table_info['interval_type_field']].label(type_field_name))
+        elif 'event_type' in table_info:    
+            table_fields.append(literal(table_info['event_type']).label(type_field_name))
+        elif 'interval_type' in table_info:    
+            table_fields.append(literal(table_info['interval_type']).label(type_field_name))
+        
+        if value_field is not None:
+            table_fields.append(table.c[value_field].label('value'))
+        elif table_info.get('default_value_field') is not None:
+            table_fields.append(table.c[table_info.get('default_value_field')].label('value'))
+        else:
+            table_fields.append(null().label('value'))
+            
+        stmt = select(
+            *table_fields
+        ).select_from(self._limit_trajectory_ids(
+            table, 
+            table_info['id_field']
+        ))
+        return stmt
         
     def extract_data_for_concepts(self, scope, concepts, value_field=None):
         """
@@ -394,55 +502,23 @@ class GenericDataset:
                     raise AttributeError(f"Value field '{value_field}' not present in scope {scope}")
                 
             with self.engine.connect() as conn:
-                if table_info['type'] == 'event':
-                    table_fields = [table.c[table_info['id_field']].label('id'), 
-                                    table.c[table_info['time_field']].label('time'),
-                                    table.c[table_info['concept_id_field']].label('concept_id')]
-                    if value_field is not None:
-                        table_fields.append(table.c[value_field].label('value'))
-                        vf = 'value'
-                    elif table_info.get('default_value_field') is not None:
-                        table_fields.append(table.c[table_info.get('default_value_field')].label('value'))
-                        vf = 'value'
-                    else:
-                        vf = None
-                elif table_info['type'] == 'interval':
-                    table_fields = [table.c[table_info['id_field']].label('id'), 
-                                    table.c[table_info['concept_id_field']].label('concept_id'),
-                                    table.c[table_info['start_time_field']].label('start_time'), 
-                                    table.c[table_info['end_time_field']].label('end_time')]
-                    if value_field is not None:
-                        table_fields.append(table.c[value_field].label('value'))
-                        vf = 'value'
-                    elif table_info.get('default_value_field') is not None:
-                        table_fields.append(table.c[table_info.get('default_value_field')].label('value'))
-                        vf = 'value'
-                    else:
-                        vf = None
-                        
-                stmt = select(
-                    *table_fields
-                ).select_from(self._limit_trajectory_ids(
-                    table, 
-                    table_info['id_field']
-                )).where(
+                base_query = self._base_query_for_table(table_info, value_field=value_field)
+                stmt = base_query.where(
                     table.c[table_info['concept_id_field']].in_([c[0] for c in concepts]))
                 result = conn.execute(stmt)
                 result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                if vf is None:
-                    result_df["value"] = pd.NA
                 results.append(result_df)
                 
         if return_type == 'event':
-            return Events(pd.concat(results, axis=0), 
+            return Events(pd.concat([r for r in results if len(r)], axis=0, ignore_index=True), 
                         id_field='id',
-                        type_field='concept_id',
+                        type_field='eventtype',
                         time_field='time',
                         value_field='value')
         elif return_type == 'interval':
-            return Intervals(pd.concat(results, axis=0), 
+            return Intervals(pd.concat([r for r in results if len(r)], axis=0, ignore_index=True), 
                             id_field='id',
-                            type_field='concept_id',
+                            type_field='intervaltype',
                             start_time_field='starttime',
                             end_time_field='endtime',
                             value_field='value')
@@ -456,15 +532,15 @@ class GenericDataset:
         with self.engine.connect() as conn:
             all_times = union(
                 *(select(
-                    self._get_table(scope_info['source']).c[scope_info['id_field']].label('id'),
-                    self._get_table(scope_info['source']).c[scope_info['start_time_field']].label('mintime')
+                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['start_time_field']]).label('mintime')
                 ).select_from(self._limit_trajectory_ids(
                     self._get_table(scope_info['source']), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
                 *(select(
-                    self._get_table(scope_info['source']).c[scope_info['id_field']].label('id'),
-                    self._get_table(scope_info['source']).c[scope_info['time_field']].label('mintime')
+                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['time_field']]).label('mintime')
                 ).select_from(self._limit_trajectory_ids(
                     self._get_table(scope_info['source']), 
                     scope_info['id_field']
@@ -483,21 +559,22 @@ class GenericDataset:
         with self.engine.connect() as conn:
             all_times = union(
                 *(select(
-                    self._get_table(scope_info['source']).c[scope_info['id_field']].label('id'),
-                    self._get_table(scope_info['source']).c[scope_info['end_time_field']].label('maxtime')
+                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['end_time_field']]).label('maxtime')
                 ).select_from(self._limit_trajectory_ids(
                     self._get_table(scope_info['source']), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
                 *(select(
-                    self._get_table(scope_info['source']).c[scope_info['id_field']].label('id'),
-                    self._get_table(scope_info['source']).c[scope_info['time_field']].label('maxtime')
+                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['time_field']]).label('maxtime')
                 ).select_from(self._limit_trajectory_ids(
                     self._get_table(scope_info['source']), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
             ).cte('all_times')
-            stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + datetime.timedelta(seconds=1)).label('maxtime')).group_by(all_times.c.id)
+            increment = datetime.timedelta(seconds=1) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
+            stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + increment).label('maxtime')).group_by(all_times.c.id)
             # print(stmt.compile(compile_kwargs={"literal_binds": True}))
             result = conn.execute(stmt)
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
@@ -537,8 +614,6 @@ class GenericDataset:
             data type is not specified (meaning that the return type is
             indeterminate).
         """
-        if (concept_name_query is None) == (concept_id_query is None):
-            raise ValueError("Exactly one of id and name must be specified")
         if concept_id_query is not None and not isinstance(concept_id_query, ConceptFilter):
             concept_id_query = ConceptFilter(*concept_id_query)
         if concept_name_query is not None and not isinstance(concept_name_query, ConceptFilter):
@@ -558,13 +633,51 @@ class GenericDataset:
             if attr:
                 return attr
             
-        candidates = []
+        candidates = {}
         if concept_name_query is not None:
             candidate_nonconcept = self.attempt_nonconcept_extract(concept_name_query, 
                                                                    scope=scope, 
                                                                    return_type=data_type, 
                                                                    value_field=value_field)
-            candidates += candidate_nonconcept
+            candidates.update(candidate_nonconcept)
+            
+        num_existing = sum(len(c) > 0 for c in candidates.values())
+        if num_existing > 1:
+            raise ValueError(f"Multiple data elements found matching query {concept_name_query or concept_id_query}. Try specifying a data type or scope.")
+        first_candidate = next((c for c in candidates.values() if len(c) > 0), None)
+        if first_candidate is not None: return first_candidate
+
+        if concept_id_query is None and concept_name_query is None:
+            if scope is None:
+                raise ValueError("Scope must be provided if neither id nor name query are given")
+            
+            with self.engine.connect() as conn:
+                tables = []
+                return_type = None
+                for table_info in self.tables:
+                    if table_info.get('scope') != scope: continue
+                    if return_type is None: return_type = table_info['type']
+                    if return_type != table_info['type']:
+                        raise ValueError(f"Data elements with scope '{scope}' must have same type, got {return_type} and {table_info['type']}")                    
+                    tables.append(self._base_query_for_table(table_info, value_field=value_field))
+                        
+                result = conn.execute(union(*tables))
+                result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                
+            if return_type == 'event':
+                return Events(result_df,
+                            id_field='id',
+                            type_field='eventtype',
+                            time_field='time',
+                            value_field='value')
+            elif return_type == 'interval':
+                return Intervals(result_df, 
+                                id_field='id',
+                                type_field='intervaltype',
+                                start_time_field='starttime',
+                                end_time_field='endtime',
+                                value_field='value')
+            assert False, f'Unknown return type {return_type}'
             
         matching_concepts = self.search_concept_id(concept_id_query=concept_id_query,
                                                    concept_name_query=concept_name_query,
@@ -578,21 +691,26 @@ class GenericDataset:
             
         print("Matching concepts:", matching_concepts)
         
-        candidates += [self.extract_data_for_concepts(scope, concepts, value_field=value_field)
-                      for scope, concepts in matching_concepts.items()]
-        num_existing = sum(len(c) > 0 for c in candidates)
+        for scope, concepts in matching_concepts.items():
+            scope_results = self.extract_data_for_concepts(scope, concepts, value_field=value_field)
+            if len(scope_results) > 0:
+                if scope in candidates:
+                    # append the new dataframe to the existing one
+                    candidates[scope] = union_data(candidates[scope],
+                                                   scope_results)
+                else:
+                    candidates[scope] = scope_results
+
+        num_existing = sum(len(c) > 0 for c in candidates.values())
         if num_existing > 1:
             raise ValueError(f"Multiple data elements found matching query {concept_name_query or concept_id_query}. Try specifying a data type or scope.")
         elif num_existing == 0:
             raise KeyError(f"No data element found matching query {concept_name_query or concept_id_query}")
 
-        return next(c for c in candidates if len(c) > 0)
+        return next(c for c in candidates.values() if len(c) > 0)
 
-    def set_trajectory_ids(self, trajectory_id_list):
-        """
-        Sets the dataset to only return results for the given set of trajectory
-        IDs.
-        """
+    def _load_trajectory_id_table(self):
+        """Attempt to load the trajectory ID table from the scratch location if it exists."""
         try:
             self._trajectory_id_table = Table(TRAJECTORY_ID_TABLE_NAME,
                                               self.metadata,
@@ -600,23 +718,173 @@ class GenericDataset:
                                               autoload_with=self.engine)
         except NoSuchTableError:
             pass
-        finally:
-            if self._trajectory_id_table is not None:
-                print("Trajectory ID table exists - dropping...")
-                self.metadata.drop_all(bind=self.engine, tables=[self._trajectory_id_table])
+        
+    def reset_trajectory_ids(self):
+        """
+        Remove any filter on the trajectory IDs returned by queries on the dataset.
+        """
+        self._load_trajectory_id_table()
+        if self._trajectory_id_table is not None:
+            print("Trajectory ID table exists - dropping...")
+            self.metadata.drop_all(bind=self.engine, tables=[self._trajectory_id_table])
+            self.metadata.remove(self._trajectory_id_table)
+            self._trajectory_id_table = None
+        
+    def set_trajectory_ids(self, trajectory_id_list, batch_size=5000):
+        """
+        Sets the dataset to only return results for the given set of trajectory
+        IDs.
+        """
+        self.reset_trajectory_ids()
         
         # get the ID field type from a random table entry
         arbitrary_table_info = next((t for t in self.tables if "source" in t and "id_field" in t), None)
         if not arbitrary_table_info:
             raise ValueError("No tables have a source and an ID field, cannot infer ID field type")
-        id_field_type = self._get_table(arbitrary_table_info['source']).c[arbitrary_table_info['id_field']].type
+        id_field_type = self.id_field_transform(self._get_table(arbitrary_table_info['source']).c[arbitrary_table_info['id_field']]).type
         self._trajectory_id_table = Table(TRAJECTORY_ID_TABLE_NAME, 
                                           self.metadata,
                                           Column(TRAJECTORY_ID_TABLE_ID_FIELD, id_field_type, primary_key=True),
                                           schema=self.scratch_schema_name)
         self.metadata.create_all(bind=self.engine, tables=[self._trajectory_id_table])
         with self.engine.connect() as conn:
-            conn.execute(insert(self._trajectory_id_table).values([
-                {TRAJECTORY_ID_TABLE_ID_FIELD: convert_to_native_types(id_val)}
-                for id_val in trajectory_id_list
-            ]))
+            for start_idx in range(0, len(trajectory_id_list), batch_size):
+                conn.execute(insert(self._trajectory_id_table).values([
+                    {TRAJECTORY_ID_TABLE_ID_FIELD: convert_to_native_types(id_val)}
+                    for id_val in trajectory_id_list[start_idx:start_idx + batch_size]
+                ]))
+            
+    def list_names(self, scope=None, return_counts=False):
+        """
+        Retrieve a dataframe containing the applicable names for attributes, events 
+        or intervals within the given scope (or if None, then all scopes). If True, 
+        then return  a dataframe with a 'count' column containing the number of 
+        matching attributes, events, or intervals with that name. If False, then 
+        return a dataframe with name and scope.
+        """
+        type_names = []
+        for table_info in self.tables:
+            if scope is not None and 'scope' in table_info and scope != table_info.get('scope'):
+                continue
+            table = self._get_table(table_info['source'])
+            
+            if 'attributes' in table_info:
+                if return_counts:
+                    with self.engine.connect() as conn:
+                        table_count = select(
+                            func.count()
+                        ).select_from(self._limit_trajectory_ids(
+                            table, table_info['id_field']
+                        ))
+                        table_count = conn.execute(table_count).fetchone()[0]
+                else:
+                    table_count = None
+                type_names.append(pd.DataFrame([{
+                    'name': attr,
+                    'type': 'attribute',
+                    'scope': table_info.get('scope'),
+                    **({'count': table_count} if table_count is not None else {})
+                } for attr in table_info['attributes']]))
+                
+            if 'type' not in table_info: continue
+            
+            if 'event_type' in table_info or 'interval_type' in table_info:
+                type_field = 'event_type' if 'event_type' in table_info else 'interval_type'
+                if return_counts:
+                    with self.engine.connect() as conn:
+                        table_count = select(
+                            func.count()
+                        ).select_from(self._limit_trajectory_ids(
+                            table, table_info['id_field']
+                        ))
+                        result = conn.execute(table_count).fetchone()[0]
+                        type_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                                                         'type': table_info['type'],
+                                                         'scope': table_info.get('scope'), 
+                                                         'count': result}]))
+                else:
+                    type_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                                                     'scope': table_info.get('scope'),
+                                                     'type': table_info['type']}]))
+            elif 'event_type_field' in table_info or 'interval_type_field' in table_info:
+                type_field = 'event_type_field' if 'event_type_field' in table_info else 'interval_type_field'
+                with self.engine.connect() as conn:
+                    if return_counts:
+                        stmt = select(
+                            table.c[table_info[type_field]].label('name'),
+                            func.count().label('count')
+                        ).select_from(self._limit_trajectory_ids(
+                            table, table_info['id_field']
+                        )).group_by(
+                            table.c[table_info[type_field]]
+                        )
+                    else:
+                        stmt = select(distinct(table.c[table_info[type_field]].label('name')))
+                    result = conn.execute(stmt)
+                    result_df = pd.DataFrame(result.fetchall(), columns=result.keys()).assign(
+                        scope=table_info.get('scope'), 
+                        type=table_info['type'])
+                    type_names.append(result_df)
+            elif 'events' in table_info or 'intervals' in table_info:
+                type_field = 'events' if 'events' in table_info else 'intervals'
+                with self.engine.connect() as conn:
+                    for event, event_info in table_info[type_field].items():
+                        if return_counts:
+                            stmt = select(
+                                func.count()
+                            ).select_from(self._limit_trajectory_ids(
+                                table, table_info['id_field']
+                            ))
+                            if event_info.get('filter_nulls', False) and 'value_field' in event_info:
+                                stmt = stmt.where(table.c[event_info['value_field']] != None)
+                                
+                            print("Getting count for", stmt)
+                            result = conn.execute(stmt).fetchone()[0]
+                            type_names.append(pd.DataFrame([{'name': event, 
+                                                             'scope': table_info.get('scope'), 
+                                                             'count': result, 
+                                                             'type': table_info['type']}]))
+                        else:
+                            type_names.append(pd.DataFrame([{'name': table_info['event_type'], 
+                                                             'scope': table_info.get('scope'),
+                                                             'type': table_info['type']}]))
+            elif 'concept_id_field' in table_info:
+                # join against the vocabulary
+                vocabulary_tables = []
+                for vocabulary in self.vocabularies:
+                    if scope is not None and "scopes" in vocabulary and scope not in vocabulary["scopes"]:
+                        continue
+                    
+                    concept_id_field = vocabulary.get('concept_id_field', 'concept_id')
+                    concept_name_field = vocabulary.get('concept_name_field', 'concept_name')
+                    if "source" not in vocabulary: raise ValueError("Vocabulary must have a source")
+                    
+                    vocab_table = self._get_table(vocabulary['source'])
+                    vocab_stmt = select(
+                        vocab_table.c[concept_id_field].label("id"),
+                        vocab_table.c[concept_name_field].label("name")
+                    )
+                    if vocabulary.get('scope_field', 'scope') in vocab_table.c and 'scope' in table_info:
+                        vocab_stmt = vocab_stmt.where(vocab_table.c[vocabulary.get('scope_field', 'scope')] == table_info['scope'])
+                    vocabulary_tables.append(vocab_stmt)
+                vocabulary_tables = union(*vocabulary_tables).cte('vocab')
+                with self.engine.connect() as conn:
+                    stmt = select(
+                        vocabulary_tables.c['name'],
+                        *([func.count().label('count')] if return_counts else [])
+                    ).distinct().select_from(
+                        table.join(vocabulary_tables,
+                                   table.c[table_info['concept_id_field']] == vocabulary_tables.c['id'])
+                    ).group_by(vocabulary_tables.c['name'])
+                    result = conn.execute(stmt)
+                    result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys())).assign(
+                        scope=table_info.get('scope'),
+                        type=table_info['type']
+                    )
+                    type_names.append(result_df)
+        
+        if not type_names:
+            return pd.DataFrame({'name': [], 'scope': [], 'type': [], **({'count': []} if return_counts else {})})
+        result = pd.concat(type_names, axis=0, ignore_index=True)
+        if return_counts: result = result.sort_values('count', ascending=False)
+        return result
