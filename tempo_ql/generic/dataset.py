@@ -98,6 +98,7 @@ class GenericDataset:
         self.verbose = verbose
         self.id_field_transform = id_field_transform or (lambda x: x)
         self.time_field_transform = time_field_transform or (lambda x: x)
+        self._captured_queries = []
         
     def __del__(self):
         if self.connection is not None: self.connection.close()
@@ -120,6 +121,44 @@ class GenericDataset:
             return base_table.join(self._trajectory_id_table,
                                    self.id_field_transform(base_table.c[id_field]) == self._trajectory_id_table.c[TRAJECTORY_ID_TABLE_ID_FIELD])
         return base_table
+    
+    def get_all_ids(self):
+        """
+        Returns a list of all IDs in the dataset (by querying all known tables 
+        for their ID column).
+        """
+        with self.engine.connect() as conn:
+            unioned_tables = union(*(
+                select(
+                    distinct(self.id_field_transform(self._get_table(table["source"]).c[table["id_field"]])).label("id")
+                ) for table in self.tables
+                if "source" in table and "id_field" in table
+            )).cte('all_ids')
+            stmt = select(unioned_tables.c["id"]).distinct()
+            if self.verbose:
+                print(f"Querying all known tables to get the list of trajectory IDs")
+            result = self._execute_query(conn, stmt).fetchall()
+            return pd.DataFrame(result, columns=["id"])
+    
+    def _capture_sql_query(self, stmt):
+        """Capture the SQL query string from a SQLAlchemy statement"""
+        try:
+            # Compile the statement with literal binds to get the actual SQL
+            compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+            self.last_sql_query = str(compiled)
+            self._captured_queries.append(self.last_sql_query)
+        except Exception as e:
+            # Fallback to string representation if compilation fails
+            self.last_sql_query = str(stmt)
+            self._captured_queries.append(self.last_sql_query)
+        
+    def _execute_query(self, conn, stmt):
+        """
+        Execute the given query and capture the string version of it for
+        inspection purposes.
+        """
+        self._capture_sql_query(stmt)
+        return conn.execute(stmt)
         
     def search_concept_id(self, concept_id_query=None, concept_name_query=None, scope=None):
         """
@@ -162,7 +201,7 @@ class GenericDataset:
                     self._get_table(vocabulary['source']).c[concept_name_field],
                     self._get_table(vocabulary['source']).c[vocabulary.get('scope_field', 'scope')]
                 ).where(or_(*filters))
-                result = conn.execute(stmt).fetchall()
+                result = self._execute_query(conn, stmt).fetchall()
                 for row in result:
                     scopes.setdefault(row[-1], []).append(tuple(row[:2]))
 
@@ -229,7 +268,7 @@ class GenericDataset:
                     ))
                     if self.verbose:
                         print(f"Querying table {table_name} for attribute {concept_name_query.query_data}")
-                result = conn.execute(stmt)
+                result = self._execute_query(conn, stmt)
                 result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                 candidates.append(Attributes(result_df.set_index(table_info['id_field'])[attr_info['value_field']]))
                 
@@ -280,7 +319,7 @@ class GenericDataset:
                                 stmt = stmt.where(self._get_table(table_name).c[vf] != None)
                             if self.verbose:
                                 print(f"Searching table {table_name} for event named {matching_key}")
-                            result = conn.execute(stmt)
+                            result = self._execute_query(conn, stmt)
                             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                         candidates.setdefault(table_scope, []).append(result_df)
                 else:      
@@ -319,7 +358,7 @@ class GenericDataset:
                                 print(f"Searching table {table_name} for rows where event type field matches {name_query}")
                         if table_info.get('filter_nulls', False) and vf is not None:
                             stmt = stmt.where(self._get_table(table_name).c[vf] != None)
-                        result = conn.execute(stmt)
+                        result = self._execute_query(conn, stmt)
                         result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
                         candidates.setdefault(table_scope, []).append(result_df)
             if (('interval_type' in table_info or 'interval_type_field' in table_info or 'intervals' in table_info) and
@@ -346,7 +385,7 @@ class GenericDataset:
                                 stmt = stmt.where(self._get_table(table_name).c[vf] != None)
                             if self.verbose:
                                 print(f"Searching table {table_name} for interval named {matching_key}")
-                            result = conn.execute(stmt)
+                            result = self._execute_query(conn, stmt)
                             result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
                             candidates.setdefault(table_scope, []).append(result_df)
                 else:
@@ -387,7 +426,7 @@ class GenericDataset:
                                 print(f"Searching table {table_name} for rows where interval type field matches {name_query}")
                         if table_info.get('filter_nulls', False) and vf is not None:
                             stmt = stmt.where(self._get_table(table_name).c[vf] != None)
-                        result = conn.execute(stmt)
+                        result = self._execute_query(conn, stmt)
                         result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
                         candidates.setdefault(table_scope, []).append(result_df)
                         
@@ -505,7 +544,7 @@ class GenericDataset:
                 base_query = self._base_query_for_table(table_info, value_field=value_field)
                 stmt = base_query.where(
                     table.c[table_info['concept_id_field']].in_([c[0] for c in concepts]))
-                result = conn.execute(stmt)
+                result = self._execute_query(conn, stmt)
                 result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                 results.append(result_df)
                 
@@ -547,7 +586,7 @@ class GenericDataset:
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
             ).cte('all_times')
             stmt = select(all_times.c.id, func.min(all_times.c.mintime).label('mintime')).group_by(all_times.c.id)
-            result = conn.execute(stmt)
+            result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
             return Attributes(result_df.set_index('id')['mintime'])
         
@@ -576,7 +615,7 @@ class GenericDataset:
             increment = datetime.timedelta(seconds=1) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
             stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + increment).label('maxtime')).group_by(all_times.c.id)
             # print(stmt.compile(compile_kwargs={"literal_binds": True}))
-            result = conn.execute(stmt)
+            result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
             return Attributes(result_df.set_index('id')['maxtime'])
         
@@ -586,7 +625,8 @@ class GenericDataset:
         data_type=None,
         concept_id_query=None,
         concept_name_query=None,
-        value_field=None):
+        value_field=None,
+        return_queries=False):
         """
         :param scope: The scope in the dataset in which to search for 
             matching concepts, or None to search all scopes. Returned data
@@ -605,6 +645,8 @@ class GenericDataset:
         :param value_field: The field in the data to represent as the values
             of the events or intervals. Ignored if the result is an Attributes.
             If None, the default value field for the given scope should be used.
+        :param return_queries: If True, additionally return the SQL queries that
+            were executed to complete the data element request.
             
         :return: A Tempo core data type representing the matching data from
             the dataset, in Attributes, Events, or Intervals format. An error
@@ -614,6 +656,8 @@ class GenericDataset:
             data type is not specified (meaning that the return type is
             indeterminate).
         """
+        self._captured_queries = []
+        
         if concept_id_query is not None and not isinstance(concept_id_query, ConceptFilter):
             concept_id_query = ConceptFilter(*concept_id_query)
         if concept_name_query is not None and not isinstance(concept_name_query, ConceptFilter):
@@ -631,7 +675,7 @@ class GenericDataset:
             # Check if the concept name query matches a predefined attribute
             attr = self.attempt_attribute_extract(concept_name_query)
             if attr:
-                return attr
+                return (attr, self._captured_queries) if return_queries else attr
             
         candidates = {}
         if concept_name_query is not None:
@@ -645,7 +689,7 @@ class GenericDataset:
         if num_existing > 1:
             raise ValueError(f"Multiple data elements found matching query {concept_name_query or concept_id_query}. Try specifying a data type or scope.")
         first_candidate = next((c for c in candidates.values() if len(c) > 0), None)
-        if first_candidate is not None: return first_candidate
+        if first_candidate is not None: return (first_candidate, self._captured_queries) if return_queries else first_candidate
 
         if concept_id_query is None and concept_name_query is None:
             if scope is None:
@@ -661,23 +705,25 @@ class GenericDataset:
                         raise ValueError(f"Data elements with scope '{scope}' must have same type, got {return_type} and {table_info['type']}")                    
                     tables.append(self._base_query_for_table(table_info, value_field=value_field))
                         
-                result = conn.execute(union(*tables))
+                result = self._execute_query(conn, union(*tables))
                 result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                 
             if return_type == 'event':
-                return Events(result_df,
+                result = Events(result_df,
                             id_field='id',
                             type_field='eventtype',
                             time_field='time',
                             value_field='value')
             elif return_type == 'interval':
-                return Intervals(result_df, 
+                result = Intervals(result_df, 
                                 id_field='id',
                                 type_field='intervaltype',
                                 start_time_field='starttime',
                                 end_time_field='endtime',
                                 value_field='value')
-            assert False, f'Unknown return type {return_type}'
+            else:
+                assert False, f'Unknown return type {return_type}'
+            return (result, self._captured_queries) if return_queries else result
             
         matching_concepts = self.search_concept_id(concept_id_query=concept_id_query,
                                                    concept_name_query=concept_name_query,
@@ -707,7 +753,9 @@ class GenericDataset:
         elif num_existing == 0:
             raise KeyError(f"No data element found matching query {concept_name_query or concept_id_query}")
 
-        return next(c for c in candidates.values() if len(c) > 0)
+        result = next(c for c in candidates.values() if len(c) > 0)
+        if return_queries: return result, self._captured_queries
+        return result
 
     def _load_trajectory_id_table(self):
         """Attempt to load the trajectory ID table from the scratch location if it exists."""
@@ -749,7 +797,7 @@ class GenericDataset:
         self.metadata.create_all(bind=self.engine, tables=[self._trajectory_id_table])
         with self.engine.connect() as conn:
             for start_idx in range(0, len(trajectory_id_list), batch_size):
-                conn.execute(insert(self._trajectory_id_table).values([
+                self._execute_query(conn, insert(self._trajectory_id_table).values([
                     {TRAJECTORY_ID_TABLE_ID_FIELD: convert_to_native_types(id_val)}
                     for id_val in trajectory_id_list[start_idx:start_idx + batch_size]
                 ]))
@@ -776,7 +824,7 @@ class GenericDataset:
                         ).select_from(self._limit_trajectory_ids(
                             table, table_info['id_field']
                         ))
-                        table_count = conn.execute(table_count).fetchone()[0]
+                        table_count = self._execute_query(conn, table_count).fetchone()[0]
                 else:
                     table_count = None
                 type_names.append(pd.DataFrame([{
@@ -797,7 +845,7 @@ class GenericDataset:
                         ).select_from(self._limit_trajectory_ids(
                             table, table_info['id_field']
                         ))
-                        result = conn.execute(table_count).fetchone()[0]
+                        result = self._execute_query(conn, table_count).fetchone()[0]
                         type_names.append(pd.DataFrame([{'name': table_info[type_field], 
                                                          'type': table_info['type'],
                                                          'scope': table_info.get('scope'), 
@@ -820,7 +868,7 @@ class GenericDataset:
                         )
                     else:
                         stmt = select(distinct(table.c[table_info[type_field]].label('name')))
-                    result = conn.execute(stmt)
+                    result = self._execute_query(conn, stmt)
                     result_df = pd.DataFrame(result.fetchall(), columns=result.keys()).assign(
                         scope=table_info.get('scope'), 
                         type=table_info['type'])
@@ -839,7 +887,7 @@ class GenericDataset:
                                 stmt = stmt.where(table.c[event_info['value_field']] != None)
                                 
                             print("Getting count for", stmt)
-                            result = conn.execute(stmt).fetchone()[0]
+                            result = self._execute_query(conn, stmt).fetchone()[0]
                             type_names.append(pd.DataFrame([{'name': event, 
                                                              'scope': table_info.get('scope'), 
                                                              'count': result, 
@@ -876,7 +924,7 @@ class GenericDataset:
                         table.join(vocabulary_tables,
                                    table.c[table_info['concept_id_field']] == vocabulary_tables.c['id'])
                     ).group_by(vocabulary_tables.c['name'])
-                    result = conn.execute(stmt)
+                    result = self._execute_query(conn, stmt)
                     result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys())).assign(
                         scope=table_info.get('scope'),
                         type=table_info['type']

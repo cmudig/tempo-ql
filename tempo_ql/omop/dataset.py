@@ -307,7 +307,8 @@ class OMOPDataset:
         data_type=None,
         concept_id_query=None,
         concept_name_query=None,
-        value_field=None):
+        value_field=None,
+        return_queries=False):
         """
         :param scope: The scope in the dataset in which to search for 
             matching concepts, or None to search all scopes. Returned data
