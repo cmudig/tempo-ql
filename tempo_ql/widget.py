@@ -14,8 +14,7 @@ from google import genai
 
 # Now you can import from tempo-ql
 import sys
-sys.path.append('/Users/maziyong/Desktop/tempo_ql/tempo-ql')
-from tempo_ql.evaluator import QueryEngine
+from evaluator import QueryEngine
 
 from utils import make_query_result_summary
 

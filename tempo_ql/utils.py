@@ -1,8 +1,7 @@
 import pandas as pd
 import numpy as np
 import sys
-sys.path.append('/Users/maziyong/Desktop/tempo_ql/tempo-ql')
-from tempo_ql.data_types import *
+from data_types import *
 
 def compute_histogram(values):
         # Handle empty or invalid input
