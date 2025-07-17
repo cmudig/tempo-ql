@@ -8,8 +8,10 @@ global-exclude *~
 global-exclude *.pyc
 global-exclude *.pyo
 global-exclude .DS_Store
+global-exclude .git
+prune **/.ipynb_checkpoints
+prune example_data/
 global-exclude *.db
 global-exclude *.db.wal
 global-exclude .git
-prune **/.ipynb_checkpoints
 prune client/
