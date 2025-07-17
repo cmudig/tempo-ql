@@ -10,7 +10,7 @@ import pandas as pd
 import math
 import json
 import asyncio
-from google import genai
+# from google import genai
 
 # Now you can import from tempo-ql
 import sys
