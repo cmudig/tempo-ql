@@ -28,6 +28,7 @@
     "@fortawesome/free-regular-svg-icons": "^6.3.0",
     "@fortawesome/free-solid-svg-icons": "^6.3.0",
     "counterpoint-vis": "^1.0.3",
+    "custom-syntax-highlighter": "^1.0.1",
     "d3": "^7.8.2",
     "layercake": "^7.6.1",
     "svelte-fa": "^3.0.3",

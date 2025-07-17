@@ -1,0 +1,83 @@
+export interface Histogram {
+    [key: string]: number;
+  }
+  
+  export interface SliceMetric {
+    type: 'binary' | 'continuous' | 'categorical' | 'count' | 'numeric';
+    value?: number;
+    length?: number;
+    missingness?: number;
+    mean?: number;
+    share?: number;
+    count?: number;
+    hist?: Histogram;
+    counts?: { [key: string]: number };
+    num_unique_ids?: number;
+    num_unique_values?: number;
+    ids_hist?: Histogram;
+    ids_hist_mean?: number;
+    num_missing_values?: number;
+    missing_ids_hist?: Histogram;
+    missing_ids_hist_mean?: number;
+  }
+  
+  export type SliceMetricInfo = {
+    visible: boolean;
+    scale?: (v: number) => number;
+    color?: string;
+    colorScale?: (v: number) => string;
+    order?: any[];
+  };
+  
+  export interface SliceFeatureBase {
+    type: any;
+  }
+  
+  export interface SliceFeature extends SliceFeatureBase {
+    col: any;
+    vals: any;
+  }
+  
+  export interface SliceFeatureNegation extends SliceFeatureBase {
+    feature: SliceFeatureBase;
+  }
+  
+  export interface SliceFeatureAnd extends SliceFeatureBase {
+    lhs: SliceFeatureBase;
+    rhs: SliceFeatureBase;
+  }
+  
+  export interface SliceFeatureOr extends SliceFeatureBase {
+    lhs: SliceFeatureBase;
+    rhs: SliceFeatureBase;
+  }
+  
+  export interface Slice {
+    stringRep: string;
+    rawFeature: SliceFeatureBase;
+    feature: SliceFeatureBase;
+    scoreValues: any;
+    isEmpty: boolean;
+    metrics?: { [key: string]: SliceMetric | { [key: string]: SliceMetric } };
+  }
+  
+  export enum SliceSearchControl {
+    containsSlice = 'contains_slice',
+    containedInSlice = 'contained_in_slice',
+    similarToSlice = 'similar_to_slice',
+    subsliceOfSlice = 'subslice_of_slice',
+  }
+  
+  export const SliceControlStrings: { [key: string]: string } = {
+    [SliceSearchControl.containsSlice]: 'Contains',
+    [SliceSearchControl.containedInSlice]: 'Contained in',
+    [SliceSearchControl.similarToSlice]: 'Similar to',
+    [SliceSearchControl.subsliceOfSlice]: 'Subslice of',
+  };
+
+  export type QueryResult = {
+    name?: string;
+    values?: SliceMetric;
+    occurrences?: SliceMetric;
+    durations?: SliceMetric;
+  };
