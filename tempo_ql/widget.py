@@ -14,9 +14,9 @@ from google import genai
 
 # Now you can import from tempo-ql
 import sys
-from evaluator import QueryEngine
+from .evaluator import QueryEngine
 
-from utils import make_query_result_summary
+from .utils import make_query_result_summary
 
 
 def default_thread_starter(fn, args=[], kwargs={}):
