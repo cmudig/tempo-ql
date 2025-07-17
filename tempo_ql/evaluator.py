@@ -15,14 +15,14 @@ from .filesystem import LocalFilesystem
 GRAMMAR = """
 start: variable_expr | variable_list
 
-time_index: "EVERY"i atom [time_bounds]            -> periodic_time_index // periodic time literal
-    | "AT EVERY"i atom [time_bounds]  -> event_time_index
-    | "AT"i "(" expr ("," expr)* ")"             -> array_time_index
+time_index: EVERY atom [time_bounds]            -> periodic_time_index // periodic time literal
+    | ATEVERY atom [time_bounds]  -> event_time_index
+    | AT "(" expr ("," expr)* ")"             -> array_time_index
 
-time_bounds: "FROM"i expr "TO"i expr              -> time_bounds_both_ends
-    | "BEFORE"i expr                              -> time_bounds_upper
-    | "AFTER"i expr                               -> time_bounds_lower
-    | "AT"i expr                               -> time_bounds_instant
+time_bounds: FROM expr TO expr              -> time_bounds_both_ends
+    | BEFORE expr                              -> time_bounds_upper
+    | AFTER expr                               -> time_bounds_lower
+    | AT expr                               -> time_bounds_instant
 
 variable_list: variable_expr
     | "(" variable_expr ("," variable_expr)* ")"
@@ -91,12 +91,12 @@ atom: VAR_NAME "(" expr ("," expr)* ")"                 -> function_call
     | data_element_query ["AS"i UNIT]                   -> data_element
     | time_quantity
     | LITERAL                               -> literal
-    | "#NOW"i                                -> now 
-    | "#VALUE"i                              -> where_value
-    | "#MINTIME"i                              -> min_time
-    | "#MAXTIME"i                              -> max_time
-    | "#INDEXVALUE"i                            -> index_value
-    | "CASE"i (case_when)+ "ELSE"i expr "END"i -> case_expr     // if/else
+    | NOW                                -> now 
+    | VALUE                              -> where_value
+    | MINTIME                              -> min_time
+    | MAXTIME                              -> max_time
+    | INDEXVALUE                            -> index_value
+    | CASE (case_when)+ ELSE expr END -> case_expr     // if/else
     | "(" expr ")" "AS"i UNIT                      -> unit_expr
     | "(" expr ")"
     | VAR_NAME                               -> var_name
@@ -114,6 +114,22 @@ UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
 DATA_NAME: /\{[^}]*\}/
 VAR_NAME: /(?!(and|or|not|case|when|else|in|then|every|at|from|to|with|as)\b)[A-Za-z][A-Za-z0-9_]*/ 
+
+NOW: "#NOW"i
+VALUE: "#VALUE"i
+MINTIME: "#MINTIME"i
+MAXTIME: "#MAXTIME"i
+INDEXVALUE: "#INDEXVALUE"i
+CASE: "CASE"i
+END: "END"i
+ELSE: "ELSE"i
+EVERY: "EVERY"i
+ATEVERY: "AT EVERY"i
+AT: "AT"i
+BEFORE: "BEFORE"i
+AFTER: "AFTER"i
+FROM: "FROM"i
+TO: "TO"i
 
 LITERAL: SIGNED_NUMBER | QUOTED_STRING | /-?inf(inity)?/i | /\\/(?!\\/)(\\\\\/|\\\\\\\|[^\\/])*?\\/i?/
 QUOTED_STRING: /["'`][^"'`]*["'`]/
@@ -134,27 +150,55 @@ DATA_TYPE_COALESCE = {
     "intervals": "interval"
 }
 
-class EvaluateExpression(lark.visitors.Transformer):
-    def __init__(self, dataset, eventtype_macros=None, variable_stores=None):
+class EvaluateQuery(lark.visitors.Interpreter):
+    def __init__(self, dataset, variable_transform=None, eventtype_macros=None, variable_stores=None, cache=None, verbose=False, update_fn=None):
         super().__init__()
         self.dataset = dataset
-        self.time_index = None
+        self.cache = cache
         self.eventtype_macros = eventtype_macros if eventtype_macros is not None else {}
+        self.variable_stores = variable_stores
+        self.update_fn = update_fn
+        # If provided, this should be a tuple of (description, transform_fn, restore_fn). The
+        # description should be a string uniquely identifying this transform,
+        # and transform should be a function that will be called on any variable 
+        # expressions before saving to cache. The function should
+        # take as input a TimeSeriesQueryable, and it should return either a 
+        # tuple (transformed, info). The info will be stored in the cache. If the
+        # query result is retrieved from the cache, the restore_fn will be called
+        # with two arguments, the stored TimeSeriesQueryable and the stored info,
+        # and it should return a restored version of the time series object.
+        if variable_transform is not None:
+            self.variable_transform_desc, self.variable_transform, self.variable_restore = variable_transform
+        else:
+            self.variable_transform_desc = None
+            self.variable_transform = None
+            self.variable_restore = None
+        self.verbose = verbose
+        self._logging_subqueries = False
+        self._subqueries = {}
+        
+        self.time_index = None
         self.value_placeholder = None
         self.index_value_placeholder = None
         self.variables = {}
-        self.variable_stores = variable_stores # external storage of variables
         self._all_ids = None
         self._mintimes = None
         self._maxtimes = None
         
+    def _log_subquery(self, subtree, subresult, **kwargs):
+        """Logs information about the given subquery and returns the subquery result."""
+        if not self._logging_subqueries: return subresult
+        self._subqueries[subtree] = { "result": subresult, **kwargs }
+        return subresult
+                
     def get_all_ids(self):
         if self._all_ids is not None: return self._all_ids
         self._all_ids = self.dataset.get_ids()
         return self._all_ids
         
-    def data_element_query_basic(self, args):
-        query = args[0]
+    
+    def data_element_query_basic(self, tree):
+        query = tree.children[0]
         if query in self.eventtype_macros:
             query = self.eventtype_macros[query].strip()
         if "," in query:
@@ -165,36 +209,40 @@ class EvaluateExpression(lark.visitors.Transformer):
             return {"name": ("in", query)}
         return {"name": ("equals", query)}
 
-    def data_element_query_list(self, args):
-        return {k: v for arg in args for k, v in arg.items()}
+    def data_element_query_list(self, tree):
+        return {k: v for child in tree.children for k, v in self.visit(child).items()}
         
-    def data_element_eq(self, args):
-        if args[0].lower() not in ("id", "name", "type", "scope", "value"):
-            raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
-        return {args[0].lower(): ("equals", self._parse_literal(args[1]) if args[1].type in ("LITERAL", "QUOTED_STRING", "SIGNED_NUMBER") else args[1].value)}
+    def data_element_eq(self, tree):
+        field, value_spec = tree.children
+        if field.lower() not in ("id", "name", "type", "scope", "value"):
+            raise ValueError(f"Unknown field specifier for data element query '{field}'")
+        return {field.lower(): ("equals", self._parse_literal(value_spec) if value_spec.type in ("LITERAL", "QUOTED_STRING", "SIGNED_NUMBER") else value_spec.value)}
     
-    def data_element_in(self, args):
-        if args[0].lower() not in ("id", "name", "type", "scope", "value"):
-            raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
-        if args[0].lower() in ("value", "scope", "type"):
-            raise ValueError(f"'in' queries cannot be used with '{args[0]}' field specifier")
-        return {args[0].lower(): ("in", args[1])}
+    def data_element_in(self, tree):
+        field, value_spec = tree.children
+        if field.lower() not in ("id", "name", "type", "scope", "value"):
+            raise ValueError(f"Unknown field specifier for data element query '{field}'")
+        if field.lower() in ("value", "scope", "type"):
+            raise ValueError(f"'in' queries cannot be used with '{field}' field specifier")
+        return {field.lower(): ("in", self.visit(value_spec))}
     
-    def data_element_pattern(self, args):
-        if args[0].lower() not in ("id", "name", "type", "scope", "value"):
-            raise ValueError(f"Unknown field specifier for data element query '{args[0]}'")
-        if args[0].lower() in ("value", "scope", "type"):
-            raise ValueError(f"Pattern-based queries cannot be used with '{args[0]}' field specifier")
-        return {args[0].lower(): (args[1].lower(), self._parse_literal(args[2]))}
+    def data_element_pattern(self, tree):
+        field, relation, value_spec = tree.children
+        if field.lower() not in ("id", "name", "type", "scope", "value"):
+            raise ValueError(f"Unknown field specifier for data element query '{field}'")
+        if field.lower() in ("value", "scope", "type"):
+            raise ValueError(f"Pattern-based queries cannot be used with '{field}' field specifier")
+        return {field.lower(): (relation.lower(), self._parse_literal(value_spec))}
 
-    def data_element(self, args):
-        requested_type = args[0].get("type", (None, None))[1]
+    def data_element(self, tree):
+        el_query = self.visit(tree.children[0])
+        requested_type = el_query.get("type", (None, None))[1]
         if requested_type is not None:
             if requested_type not in DATA_TYPE_COALESCE:
                 raise ValueError(f"Unknown data type '{requested_type}'; must be attribute, event, interval, or similar")
             requested_type = DATA_TYPE_COALESCE[requested_type]
             
-        if requested_type is not None and not args[0].get("id", None) and not args[0].get("name", None):
+        if requested_type is not None and not el_query.get("id", None) and not el_query.get("name", None):
             # empty element of the given type
             if requested_type == "attribute":
                 return Attributes(pd.Series([], dtype=float, name=f"{uuid.uuid4()}"))
@@ -213,33 +261,41 @@ class EvaluateExpression(lark.visitors.Transformer):
                     'intervaltype': pd.Series([], dtype=str),
                     'value': pd.Series([], dtype=float)
                 }))
-                            
+
         value = self.dataset.get_data_element(
-            scope=args[0].get("scope", (None, None))[1],
+            scope=el_query.get("scope", (None, None))[1],
             data_type=requested_type,
-            concept_id_query=args[0].get("id", None),
-            concept_name_query=args[0].get("name", None),
-            value_field=args[0].get("value", (None, None))[1])
-        if len(args) > 1 and args[1]:
-            value /= Duration(1, args[1])
-        return value
+            concept_id_query=el_query.get("id", None),
+            concept_name_query=el_query.get("name", None),
+            value_field=el_query.get("value", (None, None))[1],
+            return_queries=self._logging_subqueries)
         
-    def var_name(self, args):
+        if self._logging_subqueries:
+            value, queries = value
+        else:
+            queries = None
+                
+        if len(tree.children) > 1 and tree.children[1]:
+            value /= Duration(1, tree.children[1])
+        return self._log_subquery(tree, value, dataset_queries=queries)
+        
+    def var_name(self, tree):
         # first process local variables
-        if args[0] in self.variables:
-            return self.variables[args[0]]
+        var_name = tree.children[0]
+        if var_name in self.variables:
+            return self._log_subquery(tree, self.variables[var_name])
         # then process external variables in order
         if self.variable_stores is not None:
             for store in self.variable_stores:
-                print("Checking store", store, args[0])
-                if args[0] in store: return store[args[0]]
-        raise KeyError(f"No variable named {args[0]}")
+                print("Checking store", store, var_name)
+                if var_name in store: return self._log_subquery(tree, store[var_name])
+        raise KeyError(f"No variable named {var_name}")
         
-    def time_quantity(self, args):
-        return Duration(self._parse_literal(args[0]), args[1])
+    def time_quantity(self, tree):
+        return Duration(self._parse_literal(tree.children[0]), tree.children[1])
         
-    def time_bounds(self, args):
-        start, end = args
+    def time_bounds(self, tree):
+        start, end = self.visit(tree.children[1]), self.visit(tree.children[3])
         if isinstance(start, Compilable):
             start = start.execute()
         if isinstance(end, Compilable):
@@ -297,19 +353,26 @@ class EvaluateExpression(lark.visitors.Transformer):
             
         return (start, end, new_index)
     
-    def time_bounds_both_ends(self, args):
-        return self.time_bounds(args)
+    def time_bounds_both_ends(self, tree):
+        return self.time_bounds(tree)
     
-    def time_bounds_upper(self, args):
-        start, end, new_index = self.time_bounds([self.min_time([]), args[0]])
+    def time_bounds_upper(self, tree):
+        start, end, new_index = self.time_bounds(lark.Tree('', [lark.Token('', ''), 
+                                                                self.min_time(lark.Tree('', [])),
+                                                                lark.Token('', ''),
+                                                                self.visit(tree.children[1])]))
         return start, self._perform_binary_numpy_function([start, end], "max", np.maximum), new_index
     
-    def time_bounds_lower(self, args):
-        start, end, new_index = self.time_bounds([args[0], self.max_time([])])
+    def time_bounds_lower(self, tree):
+        start, end, new_index = self.time_bounds(lark.Tree('', [lark.Token('', ''),
+                                                                self.visit(tree.children[1]), 
+                                                                lark.Token('', ''),
+                                                                self.max_time(lark.Tree('', []))]))
         return self._perform_binary_numpy_function([start, end], "min", np.minimum), end, new_index
 
-    def time_bounds_instant(self, args):
-        return self.time_bounds([args[0], args[0]])
+    def time_bounds_instant(self, tree):
+        times = self.visit(tree.children[0])
+        return self.time_bounds(lark.Tree('', [lark.Token('', ''), times, lark.Token('', ''), times]))
     
     def _parse_literal(self, literal):
         if literal.startswith('/'):
@@ -329,74 +392,79 @@ class EvaluateExpression(lark.visitors.Transformer):
         except ValueError:
             raise ValueError("Literal must be either a number or quote-wrapped string")
             
-    def literal(self, args): return self._parse_literal(args[0])
+    def literal(self, tree): return self._parse_literal(tree.children[0])
 
-    def now(self, args): 
+    def now(self, tree): 
         if self.time_index is None:
             raise ValueError(f"'now' keyword can only be used within a time-series expression, ending with an 'at'/'every'/'at every' clause.")
         return self.time_index
-    def where_value(self, args):
+    def where_value(self, tree):
         if self.value_placeholder is None:
             raise ValueError(f"'value' keyword can only be used within a where clause to refer to the data being filtered.")
         return Compilable(self.value_placeholder) if self.time_index is not None else self.value_placeholder
-    def index_value(self, args):
+    def index_value(self, tree):
         if self.index_value_placeholder is None:
             raise ValueError(f"'indexvalue' keyword can only be used within a time series defined with 'at every' event or interval.")
         return Compilable(self.index_value_placeholder)
-    def atom(self, args): return args[0]
+    def atom(self, tree): return self.visit(tree.children[0])
     
-    def unit_expr(self, args): 
-        return args[0] / Duration(1, args[1])
+    def unit_expr(self, tree): 
+        expr, unit = tree.children[0]
+        return self.visit(expr) / Duration(1, unit)
     
-    def min_time(self, args):
+    def min_time(self, tree):
         if self._mintimes is not None: return self._mintimes
         self._mintimes = self.dataset.get_min_times()
         return self._mintimes
     
-    def max_time(self, args): 
+    def max_time(self, tree): 
         if self._maxtimes is not None: return self._maxtimes
         self._maxtimes = self.dataset.get_max_times()
         return self._maxtimes
 
-    def isin(self, args):
-        return args[0].isin(args[1])
-    def isnotin(self, args):
-        return ~args[0].isin(args[1])
+    def isin(self, tree):
+        return self.visit(tree.children[0]).isin(self.visit(tree.children[1]))
+    def isnotin(self, tree):
+        return ~self.visit(tree.children[0]).isin(self.visit(tree.children[1]))
     
-    def value_list(self, args): return [self._parse_literal(v) for v in args]
+    def value_list(self, tree): return [self._parse_literal(v) for v in tree.children]
         
-    def expr_add(self, args): return args[0] + args[1]
-    def expr_sub(self, args): return args[0] - args[1]
-    def expr_mul(self, args): return args[0] * args[1]
-    def expr_div(self, args): return args[0] / args[1]
-    def expr_pow(self, args): return args[0] ** args[1]
-    def gt(self, args): return args[0] > args[1]
-    def lt(self, args): return args[0] < args[1]
-    def geq(self, args): return args[0] >= args[1]
-    def leq(self, args): return args[0] <= args[1]
-    def eq(self, args): return args[0] == args[1]
-    def ne(self, args): return args[0] != args[1]
-    def between(self, args): return (args[0] >= args[1]) & (args[0] < args[2])
+    def expr_add(self, tree): return self.visit(tree.children[0]) + self.visit(tree.children[1])
+    def expr_sub(self, tree): return self.visit(tree.children[0]) - self.visit(tree.children[1])
+    def expr_mul(self, tree): return self.visit(tree.children[0]) * self.visit(tree.children[1])
+    def expr_div(self, tree): return self.visit(tree.children[0]) / self.visit(tree.children[1])
+    def expr_pow(self, tree): return self.visit(tree.children[0]) ** self.visit(tree.children[1])
+    def gt(self, tree): return self.visit(tree.children[0]) > self.visit(tree.children[1])
+    def lt(self, tree): return self.visit(tree.children[0]) < self.visit(tree.children[1])
+    def geq(self, tree): return self.visit(tree.children[0]) >= self.visit(tree.children[1])
+    def leq(self, tree): return self.visit(tree.children[0]) <= self.visit(tree.children[1])
+    def eq(self, tree): return self.visit(tree.children[0]) == self.visit(tree.children[1])
+    def ne(self, tree): return self.visit(tree.children[0]) != self.visit(tree.children[1])
+    def between(self, tree): return ((self.visit(tree.children[0]) >= self.visit(tree.children[1])) & 
+                                     (self.visit(tree.children[0]) < self.visit(tree.children[2])))
     
-    def contains(self, args):
-        strings = args[0].get_values().astype(str)
-        return args[0].with_values(strings.str.contains(args[1]))
-    def startswith(self, args):
-        strings = args[0].get_values().astype(str)
-        return args[0].with_values(strings.str.startswith(args[1]))
-    def endswith(self, args):
-        strings = args[0].get_values().astype(str)
-        return args[0].with_values(strings.str.endswith(args[1]))
+    def contains(self, tree):
+        base_items = self.visit(tree.children[0])
+        strings = base_items.get_values().astype(str)
+        return base_items.with_values(strings.str.contains(self.visit(tree.children[1])))
+    def startswith(self, tree):
+        base_items = self.visit(tree.children[0])
+        strings = base_items.get_values().astype(str)
+        return base_items.with_values(strings.str.startswith(self.visit(tree.children[1])))
+    def endswith(self, tree):
+        base_items = self.visit(tree.children[0])
+        strings = base_items.get_values().astype(str)
+        return base_items.with_values(strings.str.endswith(self.visit(tree.children[1])))
     
-    def negate(self, args): return ~args[0]
+    def negate(self, tree): return ~self.visit(tree.children[0])
     
-    def logical_and(self, args): return args[0] & args[1]
-    def logical_or(self, args): return args[0] | args[1]
+    def logical_and(self, tree): return self.visit(tree.children[0]) & self.visit(tree.children[1])
+    def logical_or(self, tree): return self.visit(tree.children[0]) | self.visit(tree.children[1])
 
-    def agg_expr(self, args):
-        agg_method = args[0]
-        expr = args[1]
-        *time_bounds, time_index = args[-1]
+    def agg_expr(self, tree):
+        agg_method = self.visit(tree.children[0])
+        expr = self.visit(tree.children[1])
+        *time_bounds, time_index = self.visit(tree.children[-1])
         has_inner_time_index = time_index is not None # if this is true, the return value will be an Events!
         if time_index is None: time_index = self.time_index
         
@@ -414,19 +482,20 @@ class EvaluateExpression(lark.visitors.Transformer):
             else:
                 raise ValueError(f"Only Events and Intervals can be bin-aggregated")
             if has_inner_time_index:
-                return agg_result.to_events()
-            return agg_result
+                return self._log_subquery(tree, agg_result.to_events())
+            return self._log_subquery(tree, agg_result)
         else:
             if isinstance(expr, (Events, TimeSeries)):
-                return expr.aggregate(*time_bounds, agg_method[0])
+                return self._log_subquery(tree, expr.aggregate(*time_bounds, agg_method[0]))
             elif isinstance(expr, Intervals):
                 result = expr.aggregate(*time_bounds, agg_method[1], agg_method[0])
-                return result
+                return self._log_subquery(tree, result)
             else:
                 raise ValueError(f"Only Events and Intervals can be aggregated")            
         
-    def agg_method(self, args):
+    def agg_method(self, tree):
         results = {}
+        args = [self.visit(arg) for arg in tree.children]
         for arg in args[1:]:
             results.setdefault(arg.type, []).append(arg.value)
         agg_func = args[0].value
@@ -434,11 +503,12 @@ class EvaluateExpression(lark.visitors.Transformer):
             agg_func += " " + " ".join(sorted(x.lower() for x in results["AGG_OPTIONS"]))
         return (agg_func, results.get("AGG_TYPE", ["value"])[0])
         
-    def case_expr(self, args):
-        whens = args[:-1]
-        else_clause = args[-1]
+    def case_expr(self, tree):
+        args = [self.visit(arg) for arg in tree.children]
+        whens = args[1:-3]
+        else_clause = args[-2]
         
-        if (any(isinstance(clause, Compilable) for when in args[:-1] for clause in when.children) or 
+        if (any(isinstance(clause, Compilable) for when in whens for clause in when) or 
             isinstance(else_clause, Compilable)):
             # The entire case expression needs to be a Compilable
             whens = [tuple(Compilable(c) if not isinstance(c, Compilable) else c
@@ -454,7 +524,7 @@ class EvaluateExpression(lark.visitors.Transformer):
         if isinstance(result, Duration): result = result.value()
         
         for when in reversed(whens):
-            condition, value = when.children
+            condition, value = when
             if isinstance(value, Duration): value = value.value()
             if isinstance(value, (Events, Attributes, Intervals, TimeSeries)):
                 # Need to broadcast if one element is an Attributes
@@ -463,12 +533,12 @@ class EvaluateExpression(lark.visitors.Transformer):
                 elif isinstance(condition, Attributes) and isinstance(value, (Events, Intervals, TimeSeries)):
                     condition = make_aligned_value_series(value, condition)
                     
-                if len(value.get_values()) != len(condition.get_values()):
+                if len(value) != len(condition):
                     raise ValueError(f"Case expression operands must be same length")
                 result = value.where(condition.fillna(False).astype(bool), result)
                 result = result.where(~condition.isna(), pd.NA)
             elif isinstance(result, (Events, Attributes, Intervals, TimeSeries)):
-                if len(result.get_values()) != len(condition.get_values()):
+                if len(result) != len(condition):
                     raise ValueError(f"Case expression operands must be same length")
                 result = result.where(~condition.fillna(False).astype(bool), value)
             elif isinstance(condition, (Attributes, Events, Intervals, TimeSeries)):
@@ -477,40 +547,40 @@ class EvaluateExpression(lark.visitors.Transformer):
                 
         return result
         
-    def carry_clause(self, args):
+    def carry_clause(self, tree):
         # Defines how far the values in the time series should be
         # carried forward within a given ID
-        var_exp = args[0]
-        if isinstance(args[0], Compilable): raise NotImplementedError("Carry forward not yet implemented for nested aggregations")
-        if isinstance(args[1], lark.Tree) and args[1].data == "step_quantity":
-            steps = int(args[1].children[0].value)
+        var_exp = self.visit(tree.children[0])
+        if isinstance(var_exp, Compilable): raise NotImplementedError("Carry forward not yet implemented for nested aggregations")
+        if isinstance(tree.children[1], lark.Tree) and tree.children[1].data == "step_quantity":
+            steps = int(tree.children[1].children[0].value)
             return var_exp.carry_forward_steps(steps)
         else:
-            return var_exp.carry_forward_duration(args[1])
+            return var_exp.carry_forward_duration(tree.children[1])
             
     @lark.v_args(tree=True)
     def step_quantity(self, tree):
         return tree
     
-    def impute_clause(self, args):
+    def impute_clause(self, tree):
         # Defines how NaN values should be substituted
-        var_exp = args[0]
+        var_exp = self.visit(tree.children[0])
         if isinstance(var_exp, Compilable):
             method = "constant"
-            if args[1].value in ("mean", "median"):
-                method = args[1].value
+            if tree.children[1].value in ("mean", "median"):
+                method = tree.children[1].value
                 constant_value = None
             else:
-                constant_value = self._parse_literal(args[1].value)
+                constant_value = self._parse_literal(tree.children[1].value)
             return var_exp.impute(method=method, constant_value=constant_value)
         
         nan_mask = ~var_exp.isna()
-        if args[1].value in ("mean", "median"):
-            impute_method = args[1].value.lower()
+        if tree.children[1].value in ("mean", "median"):
+            impute_method = tree.children[1].value.lower()
             numpy_func = {"mean": np.nanmean, "median": np.nanmedian}[impute_method]
             return var_exp.replace(pd.NA, np.nan).astype(np.float64).where(nan_mask, numpy_func(var_exp.get_values().replace(pd.NA, np.nan).astype(float)))
         else:
-            impute_method = self._parse_literal(args[1].value)
+            impute_method = self._parse_literal(tree.children[1].value)
             dtype = var_exp.get_values().dtype
             if isinstance(dtype, pd.CategoricalDtype):
                 var_exp = var_exp.with_values(var_exp.get_values().astype(dtype.categories.dtype))
@@ -538,9 +608,9 @@ class EvaluateExpression(lark.visitors.Transformer):
         else:
             raise ValueError(f"{function_name} function requires at least one parameter to be Attributes, Events, Intervals, TimeIndex, or TimeSeries")
 
-    def function_call(self, args):
-        function_name = args[0].value.lower()
-        operands = args[1:]
+    def function_call(self, tree):
+        function_name = tree.children[0].value.lower()
+        operands = [self.visit(a) for a in tree.children[1:]]
         if function_name in ("time", "starttime", "endtime"):
             if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             if function_name == "time":
@@ -621,7 +691,8 @@ class EvaluateExpression(lark.visitors.Transformer):
         else:
             raise ValueError(f"Unknown function '{function_name}'")
 
-    def variable_list(self, args):
+    def variable_list(self, tree):
+        args = [self.visit(arg) for arg in tree.children]
         if len(args) == 1: return args[0]
         if all(isinstance(a, Attributes) for a in args):
             return AttributeSet(pd.concat([a.series for a in args], axis=1))
@@ -629,52 +700,25 @@ class EvaluateExpression(lark.visitors.Transformer):
             return TimeSeriesSet.from_series(args)
         raise ValueError("Variable list must contain either all Attributes or all TimeSeries objects")
     
-    def auto_cut(self, args):
-        num_bins = args[0]
+    def auto_cut(self, tree):
+        num_bins = self.visit(tree.children[0])
         if not isinstance(num_bins, (float, int)) and int(num_bins) == num_bins:
             raise ValueError("Cut must either be followed by an integer bin count or a list of bin cutoffs")
-        cut_type = args[1].value
-        return CutOperator(int(num_bins), cut_type, names=args[2] if len(args) > 2 else None)
+        cut_type = tree.children[1].value
+        return CutOperator(int(num_bins), cut_type, names=tree.children[2] if len(tree.children) > 2 else None)
     
-    def manual_cut(self, args):
-        cut_type = args[0].value
-        bins = args[1]
-        return CutOperator(np.array(bins), cut_type, names=args[2] if len(args) > 2 else None)
+    def manual_cut(self, tree):
+        cut_type = tree.children[0].value
+        bins = self.visit(tree.children[1])
+        return CutOperator(np.array(bins), cut_type, names=tree.children[2] if len(tree.children) > 2 else None)
     
-    def cut_clause(self, args):
-        base_values, cut_op = args
-        return cut_op.apply(base_values)
+    def cut_clause(self, tree):
+        base_values, cut_op = tree.children
+        return self.visit(cut_op).apply(self.visit(base_values))
         
 
-class EvaluateQuery(lark.visitors.Interpreter):
-    def __init__(self, dataset, variable_transform=None, eventtype_macros=None, variable_stores=None, cache=None, verbose=False, update_fn=None):
-        super().__init__()
-        self.dataset = dataset
-        self.cache = cache
-        self.eventtype_macros = eventtype_macros if eventtype_macros is not None else {}
-        self.variable_stores = variable_stores
-        self.update_fn = update_fn
-        # If provided, this should be a tuple of (description, transform_fn, restore_fn). The
-        # description should be a string uniquely identifying this transform,
-        # and transform should be a function that will be called on any variable 
-        # expressions before saving to cache. The function should
-        # take as input a TimeSeriesQueryable, and it should return either a 
-        # tuple (transformed, info). The info will be stored in the cache. If the
-        # query result is retrieved from the cache, the restore_fn will be called
-        # with two arguments, the stored TimeSeriesQueryable and the stored info,
-        # and it should return a restored version of the time series object.
-        if variable_transform is not None:
-            self.variable_transform_desc, self.variable_transform, self.variable_restore = variable_transform
-        else:
-            self.variable_transform_desc = None
-            self.variable_transform = None
-            self.variable_restore = None
-        self.verbose = verbose
-        self.evaluator = EvaluateExpression(self.dataset, self.eventtype_macros, variable_stores=self.variable_stores)
-        
-    def get_all_ids(self):
-        return self.evaluator.get_all_ids()
-    
+
+
     def _make_time_index(self, idx):
         if isinstance(idx, Attributes):
             return TimeIndex.from_attributes(idx)
@@ -686,26 +730,26 @@ class EvaluateQuery(lark.visitors.Interpreter):
             raise ValueError(f"Cannot convert {type(idx)} object to TimeIndex")
 
     def periodic_time_index(self, tree):
-        duration = self.evaluator.transform(tree.children[0])
+        duration = self.visit(tree.children[1])
                 
-        if tree.children[1] is not None:
-            start_time = self._make_time_index(self.evaluator.transform(tree.children[1].children[0]))
-            end_time = self._make_time_index(self.evaluator.transform(tree.children[1].children[1]))
+        if tree.children[2] is not None:
+            start_time = self._make_time_index(self.visit(tree.children[2].children[0]))
+            end_time = self._make_time_index(self.visit(tree.children[2].children[1]))
         else:
-            start_time = self._make_time_index(self.evaluator.min_time([]))
-            end_time = self._make_time_index(self.evaluator.max_time([]))
+            start_time = self._make_time_index(self.min_time(lark.Tree('', [])))
+            end_time = self._make_time_index(self.max_time(lark.Tree('', [])))
             
-        return TimeIndex.range(start_time, end_time, duration)
+        return self._log_subquery(tree, TimeIndex.range(start_time, end_time, duration))
         
     def event_time_index(self, tree):
-        events = self.evaluator.transform(tree.children[0])
+        events = self.visit(tree.children[1])
 
         if tree.children[-1] is not None:
-            start_time = self.evaluator.transform(tree.children[-1].children[0])
-            end_time = self.evaluator.transform(tree.children[-1].children[1])
+            start_time = self.visit(tree.children[-1].children[0])
+            end_time = self.visit(tree.children[-1].children[1])
         else:
-            start_time = self.evaluator.min_time([])
-            end_time = self.evaluator.max_time([])
+            start_time = self.min_time(lark.Tree('', []))
+            end_time = self.max_time(lark.Tree('', []))
             
         if isinstance(start_time, Attributes) and isinstance(end_time, Attributes):
             pass
@@ -720,7 +764,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         else:
             raise ValueError(f"Unsupported time types for event index: '{type(start_time)}' and '{type(end_time)}'")
         
-        if len(tree.children) > 2:
+        if len(tree.children) > 3:
             assert isinstance(events, Intervals), "Interval position may only be used in event index when the data element is an interval"
             if tree.children[1].value.lower() == "start":
                 events = events.start_events()
@@ -732,14 +776,14 @@ class EvaluateQuery(lark.visitors.Interpreter):
         if not isinstance(events, Events):
             raise ValueError(f"Expected 'at every' data element to evaluate to an Events object, but instead got '{type(events).__name__}'")
         index, filtered_events = TimeIndex.from_events(events, starts=start_time, ends=end_time, return_filtered_events=True)
-        self.evaluator.index_value_placeholder = TimeSeries(index, filtered_events.get_values())
-        return index
+        self.index_value_placeholder = TimeSeries(index, filtered_events.get_values())
+        return self._log_subquery(tree, index)
         
     def array_time_index(self, tree):
-        times = [self.evaluator.transform(c) for c in tree.children]
-        return TimeIndex.from_times(times)
+        times = [self.visit(c) for c in tree.children[1:]]
+        return self._log_subquery(tree, TimeIndex.from_times(times))
         
-    def _parse_variable_expr(self, tree, evaluator, time_index_tree=None, cache_only=False):            
+    def variable_expr(self, tree, cache_only=False):            
         # Parse where clauses first (these require top-down processing in case of a value placeholder)
         if not isinstance(tree, lark.Tree):
             return tree
@@ -750,26 +794,18 @@ class EvaluateQuery(lark.visitors.Interpreter):
         var_name = tree.children[0].children[0].value if tree.children[0] and tree.children[0].children[0].value else None
         if isinstance(tree.children[1], (TimeSeries, TimeSeriesSet)):
             var_exp = tree.children[1]
-        elif self.cache is not None:
-            var_exp = self.cache.lookup((tree_desc, options_desc), time_index_tree=time_index_tree, transform_info=self.variable_transform_desc)
-            if self.variable_transform_desc is not None and var_exp is not None:
-                var_exp, transform_data = var_exp
-                logging.info(f"Loaded {var_name} from cache")
-                if self.variable_restore is not None:
-                    if transform_data is None: var_exp = None
-                    else: var_exp = self.variable_restore(var_exp, transform_data)
         else: var_exp = None
         if cache_only and var_exp is None: return tree
         elif var_exp is not None:
             if var_name is not None:
                 var_exp = var_exp.rename(var_name)
-            return var_exp.compress()
+            return self._log_subquery(tree, var_exp.compress())
 
         try:
             # We only cache the main expression, so variable names and options can be adjusted later without recomputing
             # expensive aggregations
             if var_exp is None:
-                var_exp = self._parse_variable_value(tree.children[1], evaluator)            
+                var_exp = self._parse_variable_value(tree.children[1])            
                 
             if var_name is not None:
                 var_exp = var_exp.rename(var_name)
@@ -782,60 +818,59 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 transform_data = None
             var_exp = var_exp.compress()
             
-            if self.cache is not None:
-                self.cache.save((tree_desc, options_desc), 
-                                var_exp, 
-                                transform_info=self.variable_transform_desc, 
-                                transform_data=transform_data,
-                                time_index_tree=time_index_tree)
-            return var_exp
+            # if self.cache is not None:
+            #     self.cache.save((tree_desc, options_desc), 
+            #                     var_exp, 
+            #                     transform_info=self.variable_transform_desc, 
+            #                     transform_data=transform_data,
+            #                     time_index_tree=time_index_tree)
+            return self._log_subquery(tree, var_exp)
         
-    def _parse_variable_value(self, tree, evaluator):
-        self._preprocess_nested_aggregations(tree, evaluator)
+    def _parse_variable_value(self, tree):
+        self._preprocess_nested_aggregations(tree)
             
-        set_variables = set()
+        # set_variables = set()
         tree_parent = lark.Tree(None, [tree]) # in case one of the searched clauses is the root
-        for node in tree_parent.iter_subtrees():
-            if node is None: continue
-            new_children = []
-            for n in node.children:
-                if isinstance(n, lark.Tree) and n.data == "with_clause":
-                    # Defining a temporary variable
-                    base_expr, with_var_name = self._parse_with_clause(n, evaluator)
-                    set_variables.add(with_var_name)
-                    new_children.append(base_expr)
-                else:
-                    new_children.append(n)
-            node.children = new_children
+        # for node in tree_parent.iter_subtrees():
+        #     if not isinstance(node, lark.Tree): continue
+        #     new_children = []
+        #     for n in node.children:
+        #         if isinstance(n, lark.Tree) and n.data == "with_clause":
+        #             # Defining a temporary variable
+        #             base_expr, with_var_name = self._parse_with_clause(n)
+        #             set_variables.add(with_var_name)
+        #             new_children.append(base_expr)
+        #         else:
+        #             new_children.append(n)
+        #     node.children = new_children
         
-        for node in tree_parent.iter_subtrees():
-            if node is None: continue
-            node.children = [lark.Tree('atom', [self._parse_where_clause(n, evaluator)]) if isinstance(n, lark.Tree) and n.data == "where_clause" else n for n in node.children]
+        # for node in tree_parent.iter_subtrees():
+        #     if not isinstance(node, lark.Tree): continue
+        #     node.children = [lark.Tree('atom', [self._parse_where_clause(n)]) if isinstance(n, lark.Tree) and n.data == "where_clause" else n for n in node.children]
             
         tree = tree_parent.children[0]
-        var_exp = evaluator.transform(tree)
+        var_exp = self.visit(tree) if isinstance(tree, lark.Tree) else tree
         if isinstance(var_exp, Compilable): var_exp = var_exp.execute()
-        if evaluator.time_index is not None:
+        if self.time_index is not None:
             if isinstance(var_exp, Attributes):
                 # Cast the attributes over the time index
-                var_exp = TimeSeries(evaluator.time_index, make_aligned_value_series(evaluator.time_index, var_exp))
+                var_exp = TimeSeries(self.time_index, make_aligned_value_series(self.time_index, var_exp))
             elif isinstance(var_exp, TimeIndex):
                 # Use the times as the time series values
                 var_exp = TimeSeries(var_exp, var_exp.get_times())
-            elif (isinstance(var_exp, Events) and len(var_exp) == len(evaluator.time_index) and 
-                    (var_exp.get_ids().values == evaluator.time_index.get_ids().values).all()):
+            elif (isinstance(var_exp, Events) and len(var_exp) == len(self.time_index) and 
+                    (var_exp.get_ids().values == self.time_index.get_ids().values).all()):
                 # This is an Events but is perfectly aligned to the time index
                 var_exp = TimeSeries(TimeIndex.from_events(var_exp), var_exp.get_values())
             elif isinstance(var_exp, (int, float, str, np.generic)):
                 # constant value at timesteps
                 val = var_exp.item() if isinstance(var_exp, np.generic) else var_exp
-                var_exp = TimeSeries(evaluator.time_index, pd.Series([val] * len(evaluator.time_index)))
+                var_exp = TimeSeries(self.time_index, pd.Series([val] * len(self.time_index)))
         return var_exp
 
-    def _parse_time_series(self, tree, evaluator):
-        time_index_tree = tree.children[-1] if len(tree.children) > 1 else None
+    def time_series(self, tree):
         time_index = self.visit(tree.children[-1]) if len(tree.children) > 1 else None
-        evaluator.time_index = time_index
+        self.time_index = time_index
         if self.update_fn is None:
             pbar = tqdm.tqdm(tree.children[0].children) if self.verbose else tree.children[0].children
         else:
@@ -844,9 +879,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
                     yield c
                     self.update_fn(i + 1, len(tree.children[0].children))
             pbar = progress_iterable()
-        variable_definitions = [self._parse_variable_expr(child, evaluator, time_index_tree=time_index_tree) for child in pbar]
-        evaluator.time_index = None
-        evaluator.index_value_placeholder = None
+        variable_definitions = [self.visit(child) for child in pbar]
+        self.time_index = None
+        self.index_value_placeholder = None
 
         if time_index is not None and not all(isinstance(v, TimeSeries) for v in variable_definitions):
             raise ValueError(f"All variables must evaluate to a TimeSeries when a time index is provided")
@@ -855,7 +890,8 @@ class EvaluateQuery(lark.visitors.Interpreter):
         else:
             return TimeSeriesSet.from_series(variable_definitions)
         
-    def _preprocess_nested_aggregations(self, tree, evaluator):
+    def _preprocess_nested_aggregations(self, tree):
+        if not isinstance(tree, lark.Tree): return
         for node in tree.iter_subtrees_topdown():
             if node is None: continue
             if not (isinstance(node, lark.Tree) and node.data == "agg_expr"): continue
@@ -865,17 +901,17 @@ class EvaluateQuery(lark.visitors.Interpreter):
             
             for desc in node.children[1].iter_subtrees():
                 if desc is None or desc == node: continue
-                desc.children = [Compilable(evaluator.transform(n)) 
+                desc.children = [Compilable(self.visit(n)) 
                                  if (isinstance(n, lark.Tree) and n.data in ("agg_expr", "now")) else n 
                                  for n in desc.children]
                 
         
-    def _parse_where_clause(self, tree, evaluator):
+    def where_clause(self, tree):
         logging.info(f"Parsing where clause: {tree}")
-        base = evaluator.transform(tree.children[0])
-        evaluator.value_placeholder = base
-        where = evaluator.transform(tree.children[1])
-        evaluator.value_placeholder = None
+        base = self._log_subquery(tree.children[0], self.visit(tree.children[0]))
+        self.value_placeholder = base
+        where = self._log_subquery(tree.children[-1], self.visit(tree.children[-1]))
+        self.value_placeholder = None
         if isinstance(where, Compilable):
             return Compilable(base).where(where)
         elif isinstance(base, (Events, Intervals, EventSet, IntervalSet, Compilable)):
@@ -883,36 +919,67 @@ class EvaluateQuery(lark.visitors.Interpreter):
         else:
             return base.where(where, pd.NA)
         
-    def _parse_with_clause(self, tree, evaluator):
+    def with_clause(self, tree):
         var_name = tree.children[1].value
-        var_value = self._parse_variable_value(tree.children[-1], evaluator)
+        var_value = self._parse_variable_value(tree.children[-1])
         if isinstance(var_value, Compilable): var_value = var_value.execute()
-        evaluator.variables[var_name] = var_value
-        return tree.children[0], var_name
+        
+        old_val = self.variables.get(var_name) # reset it to this value after evaluating the earlier expression
+        self.variables[var_name] = var_value
+        self._log_subquery(tree, var_value)
+        result = self.visit(tree.children[0])
+        if old_val is None:
+            del self.variables[var_name]
+        else:
+            self.variables[var_name] = old_val
+        return result
+        
+    def visit(self, tree, query_string=None, return_subqueries=False):
+        if not isinstance(tree, lark.Tree): return tree
+        if query_string is None: return super().visit(tree)
+        
+        self._logging_subqueries = return_subqueries
+        self._dataset_queries = []
+        self._subqueries = {}
+        result = super().visit(tree)
+        if return_subqueries: 
+            subqueries = {}
+            for subtree, query_info in self._subqueries.items():
+                # map each subquery to its location in the original query text
+                min_pos = min(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
+                max_pos = max(token.end_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
+                print(list((token.start_pos, token.end_pos) for token in subtree.scan_values(lambda x: isinstance(x, lark.Token))), query_string[min_pos:max_pos])
+                if max_pos - min_pos == len(query_string.strip()): continue
+                subqueries[query_string[min_pos:max_pos]] = query_info
+            result = (result, subqueries)
+        self._subqueries = None
+        return result
         
     def start(self, tree):
-        # First replace all time series
-        if isinstance(tree.children[0], lark.Tree) and tree.children[0].data == "time_series":
-            return self._parse_time_series(tree.children[0], self.evaluator)
-
-        if self.use_cache:
-            # First parse cached expressions
-            for node in tree.iter_subtrees():
-                if node is None: continue
-                node.children = [self._parse_variable_expr(n, self.evaluator, cache_only=True) if isinstance(n, lark.Tree) and n.data == "variable_expr" else n for n in node.children]
+        self._subqueries = {}
         
-        # Parse time series first
-        for node in tree.iter_subtrees():
-            if node is None: continue
-            node.children = [self._parse_time_series(n, self.evaluator) if isinstance(n, lark.Tree) and n.data == "time_series" else n for n in node.children]
+        # # First replace all time series
+        # if isinstance(tree.children[0], lark.Tree) and tree.children[0].data == "time_series":
+        #     return self._parse_time_series(tree.children[0])
 
-        # Then parse detached variable expressions
-        for node in tree.iter_subtrees():
-            if node is None: continue
-            node.children = [self._parse_variable_expr(n, self.evaluator) if isinstance(n, lark.Tree) and n.data == "variable_expr" else n for n in node.children]
+        # if self.use_cache:
+        #     # First parse cached expressions
+        #     for node in tree.iter_subtrees():
+        #         if node is None: continue
+        #         node.children = [self._parse_variable_expr(n, cache_only=True) if isinstance(n, lark.Tree) and n.data == "variable_expr" else n for n in node.children]
+        
+        # # Parse time series first
+        # for node in tree.iter_subtrees():
+        #     if node is None: continue
+        #     node.children = [self._parse_time_series(n) if isinstance(n, lark.Tree) and n.data == "time_series" else n for n in node.children]
+
+        # # Then parse detached variable expressions
+        # for node in tree.iter_subtrees():
+        #     if node is None: continue
+        #     node.children = [self._parse_variable_expr(n) if isinstance(n, lark.Tree) and n.data == "variable_expr" else n for n in node.children]
             
         if isinstance(tree.children[0], lark.Tree): 
-            return self.evaluator.transform(tree.children[0])
+            return self.visit(tree.children[0])
         return tree.children[0]
     
 class QueryResultCache:
@@ -1006,7 +1073,7 @@ class QueryEngine:
     def get_ids(self):
         return self.dataset.get_ids()
     
-    def query(self, query_string, variable_transform=None, use_cache=True, update_fn=None):
+    def query(self, query_string, variable_transform=None, use_cache=True, update_fn=None, return_subqueries=False):
         query_evaluator = EvaluateQuery(self.dataset, 
                                         eventtype_macros=self.eventtype_macros, 
                                         variable_transform=variable_transform,
@@ -1015,7 +1082,7 @@ class QueryEngine:
                                         update_fn=update_fn,
                                         verbose=True)
         tree = self.parse(query_string)
-        result = query_evaluator.visit(tree)
+        result = query_evaluator.visit(tree, query_string=query_string, return_subqueries=return_subqueries)
         return result
     
     def parse(self, query, keep_all_tokens=False):

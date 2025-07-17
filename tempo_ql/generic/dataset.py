@@ -122,7 +122,7 @@ class GenericDataset:
                                    self.id_field_transform(base_table.c[id_field]) == self._trajectory_id_table.c[TRAJECTORY_ID_TABLE_ID_FIELD])
         return base_table
     
-    def get_all_ids(self):
+    def get_ids(self):
         """
         Returns a list of all IDs in the dataset (by querying all known tables 
         for their ID column).
@@ -138,7 +138,7 @@ class GenericDataset:
             if self.verbose:
                 print(f"Querying all known tables to get the list of trajectory IDs")
             result = self._execute_query(conn, stmt).fetchall()
-            return pd.DataFrame(result, columns=["id"])
+            return pd.DataFrame(result, columns=["id"])["id"]
     
     def _capture_sql_query(self, stmt):
         """Capture the SQL query string from a SQLAlchemy statement"""
