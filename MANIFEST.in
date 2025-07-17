@@ -1,7 +1,7 @@
 include LICENSE
 include README.md
 
-graft divisi/static
+graft tempo_ql/static
 
 # Patterns to exclude from any directory
 global-exclude *~
@@ -11,4 +11,7 @@ global-exclude .DS_Store
 global-exclude .git
 prune **/.ipynb_checkpoints
 prune example_data/
+global-exclude *.db
+global-exclude *.db.wal
+global-exclude .git
 prune client/
