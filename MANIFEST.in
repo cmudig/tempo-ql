@@ -1,0 +1,15 @@
+include LICENSE
+include README.md
+
+graft tempo_ql/static
+
+# Patterns to exclude from any directory
+global-exclude *~
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude .DS_Store
+global-exclude *.db
+global-exclude *.db.wal
+global-exclude .git
+prune **/.ipynb_checkpoints
+prune client/

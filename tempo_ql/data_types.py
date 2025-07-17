@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import random
+import datetime
 from .numba_functions import *
 from numba.typed import List
 from numba import njit, jit
@@ -18,7 +19,7 @@ def make_aligned_value_series(value_set, other):
             raise ValueError(f"Event sets must be same length")
         return other.get_values()
     elif isinstance(other, Duration):
-        return other.value()
+        return other.value_like(value_set.get_values())
     elif isinstance(other, pd.DataFrame):
         raise ValueError("Can't perform binary operations on Events with a DataFrame")
     return other
@@ -57,6 +58,74 @@ def compress_series(v):
         return v.astype(np.float32)
     return v
 
+def get_all_trajectory_ids(attributes, events, intervals):
+    all_ids = []
+    if attributes is not None:
+        for attr_set in attributes:
+            if len(attr_set.get_ids()):
+                all_ids.append(attr_set.get_ids().values)
+    if events is not None:
+        for event_set in events:
+            if len(event_set.get_ids()):
+                all_ids.append(event_set.get_ids().values)
+    if intervals is not None:
+        for interval_set in intervals:
+            if len(interval_set.get_ids()):
+                all_ids.append(interval_set.get_ids().values)
+    return np.unique(np.concatenate(all_ids))
+
+def union_data(lhs, rhs):
+    """Combine two TimeSeriesQueryable objects together."""
+    # determine consensus dtype for values
+    cast_dtype = None
+    lhs_dtype = lhs.get_values().dtype
+    rhs_dtype = rhs.get_values().dtype
+    if ((pd.api.types.is_object_dtype(lhs_dtype) or 
+         (isinstance(lhs_dtype, pd.CategoricalDtype) and pd.api.types.is_object_dtype(lhs_dtype.categories.dtype))) != 
+        (pd.api.types.is_object_dtype(rhs_dtype) or 
+         (isinstance(rhs_dtype, pd.CategoricalDtype) and pd.api.types.is_object_dtype(rhs_dtype.categories.dtype)))):
+        # try converting all to numeric
+        try:
+            lhs.get_values().astype(float)
+            rhs.get_values().astype(float)
+            cast_dtype = float
+        except:
+            cast_dtype = str
+    
+    if isinstance(lhs, Events):
+        if not isinstance(rhs, Events): raise ValueError(f"All arguments to union must be of the same type")
+        base = lhs
+        result = Events(pd.concat([e.df.rename(columns={
+            e.id_field: base.id_field,
+            e.time_field: base.time_field,
+            e.type_field: base.type_field,
+            e.value_field: base.value_field,
+        }) for e in [lhs, rhs]], axis=0), 
+                        id_field=base.id_field,
+                        time_field=base.time_field,
+                        type_field=base.type_field,
+                        value_field=base.value_field)
+    elif isinstance(lhs, Intervals):
+        if not isinstance(rhs, Intervals): raise ValueError(f"All arguments to union must be of the same type")
+        base = lhs
+        result = Intervals(pd.concat([e.df.rename(columns={
+            e.id_field: base.id_field,
+            e.start_time_field: base.start_time_field,
+            e.end_time_field: base.end_time_field,
+            e.type_field: base.type_field,
+            e.value_field: base.value_field,
+        }) for e in [lhs, rhs]], axis=0), 
+                        id_field=base.id_field,
+                        start_time_field=base.start_time_field,
+                        end_time_field=base.end_time_field,
+                        type_field=base.type_field,
+                        value_field=base.value_field)
+    else:
+        raise ValueError(f"Unsupported type {type(lhs).__name__} in argument to union")
+    if cast_dtype is not None:
+        print("Casting to", cast_dtype)
+        result = result.with_values(result.get_values().astype(cast_dtype))
+    return result
     
 EXCLUDE_SERIES_METHODS = ("_repr_latex_",)
 
@@ -428,7 +497,7 @@ class Compilable:
 class Attributes(TimeSeriesQueryable):
     def __init__(self, series):
         """The series' index should be the set of instance IDs"""
-        self.series = series
+        self.series = series.sort_index(kind='stable')
         self.name = self.series.name
         
     def __repr__(self):
@@ -496,7 +565,11 @@ class Attributes(TimeSeriesQueryable):
         if isinstance(other, Attributes):
             return Attributes(self.preserve_nans(getattr(self.series, opname)(other.series).rename(self.name)))
         if isinstance(other, Duration):
-            return Attributes(self.preserve_nans(getattr(self.series, opname)(other.value()).rename(self.name)))
+            if pd.api.types.is_datetime64_any_dtype(self.series.dtype):
+                duration = datetime.timedelta(seconds=other.value())
+            else:
+                duration = other.value()
+            return Attributes(self.preserve_nans(getattr(self.series, opname)(duration).rename(self.name)))
         return Attributes(self.preserve_nans(getattr(self.series, opname)(other)))
         
     def __eq__(self, other): return self._handle_binary_op("__eq__", other)
@@ -555,6 +628,10 @@ class AttributeSet(TimeSeriesQueryable):
         
     def has(self, attribute_name): return attribute_name in self.df.columns
     
+    def get_names(self): 
+        """Returns the attribute names stored in this AttributeSet."""
+        return self.df.columns
+    
     def get(self, attribute_name):
         return Attributes(self.df[attribute_name])
     
@@ -563,7 +640,7 @@ class AttributeSet(TimeSeriesQueryable):
     
 class Events(TimeSeriesQueryable):
     def __init__(self, df, type_field="eventtype", time_field="time", value_field="value", id_field="id", name=None):
-        self.df = df
+        self.df = df.sort_values([id_field, time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.time_field = time_field
         self.id_field = id_field
@@ -576,7 +653,7 @@ class Events(TimeSeriesQueryable):
                 self.df = self.df.assign(**{self.value_field: new_values})
             
         if name is None:
-            self.name = ', '.join(self.event_types)
+            self.name = ', '.join(str(x) for x in self.event_types)
         else:
             self.name = name
         
@@ -653,7 +730,11 @@ class Events(TimeSeriesQueryable):
         
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
-        event_times = self.df[self.time_field].astype(np.float64)
+        if pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype):
+            event_times = (self.df[self.time_field].astype(int)/ 10**9).astype(np.float64)
+        else:
+            event_times = self.df[self.time_field].astype(np.float64)
+
         event_values = self.df[self.value_field]
         if convert_to_categorical and (
             isinstance(event_values.dtype, pd.CategoricalDtype) or 
@@ -686,8 +767,18 @@ class Events(TimeSeriesQueryable):
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        starts = np.array(start_times.get_times(), dtype=np.int64)
-        ends = np.array(end_times.get_times(), dtype=np.int64)
+        if (pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype)):
+            starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
+        elif (not pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype)):
+            starts = np.array(start_times.get_times(), dtype=np.int64)
+            ends = np.array(end_times.get_times(), dtype=np.int64)
+        else:
+            raise ValueError("Start times, end times and event times must all be of the same type (either datetime or numeric)")
         assert (starts <= ends).all(), "Start times must be <= end times"
         
         event_ids, event_times, event_values, uniques = self.prepare_aggregation_inputs(agg_func)
@@ -771,16 +862,20 @@ class Events(TimeSeriesQueryable):
     
 class EventSet(TimeSeriesQueryable):
     def __init__(self, df, type_field="eventtype", time_field="time", id_field="id", value_field="value"):
-        self.df = df.sort_values([id_field, time_field], kind='stable')
+        self.df = df.sort_values([id_field, time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.time_field = time_field
         self.id_field = id_field
         self.value_field = value_field
+        self.event_types = self.df[self.type_field].unique()
         
     def get_ids(self): return self.df[self.id_field]
     def get_types(self): return self.df[self.type_field]
     def get_times(self): return self.df[self.time_field]
     def get_values(self): return self.df[self.value_field]
+    
+    def get_unique_types(self):
+        return self.event_types.copy()
     
     def serialize(self):
         return {
@@ -829,7 +924,7 @@ class EventSet(TimeSeriesQueryable):
         
 class Intervals(TimeSeriesQueryable):
     def __init__(self, df, type_field="intervaltype", start_time_field="starttime", end_time_field="endtime", value_field="value", id_field="id", name=None):
-        self.df = df
+        self.df = df.sort_values([id_field, start_time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.start_time_field = start_time_field
         self.end_time_field = end_time_field
@@ -842,7 +937,7 @@ class Intervals(TimeSeriesQueryable):
             if (pd.isna(new_values) == pd.isna(self.df[self.value_field])).all():
                 self.df = self.df.assign(**{self.value_field: new_values})
         if name is None:
-            self.name = ', '.join(self.event_types)
+            self.name = ', '.join(str(x) for x in self.event_types)
         else:
             self.name = name
 
@@ -912,6 +1007,28 @@ class Intervals(TimeSeriesQueryable):
                       value_field=self.value_field,
                       id_field=self.id_field,
                       name=self.name)
+
+    @staticmethod        
+    def from_events(starts, ends):
+        merged_df = pd.merge_asof(starts.df.rename(columns={
+                                        starts.time_field: "starttime",
+                                        starts.type_field: "type",
+                                        starts.value_field: "value",
+                                    }).sort_values("starttime", kind='stable'), 
+                                  ends.df.rename(columns={
+                                        ends.time_field: "endtime",
+                                        ends.value_field: "value",
+                                        ends.id_field: starts.id_field
+                                    }).sort_values("endtime", kind='stable'), 
+                                  left_on='starttime', 
+                                  right_on='endtime', 
+                                  direction='forward',
+                                  by=starts.id_field)
+        merged_df["value"] = merged_df["value_x"].where(~pd.isna(merged_df["value_x"]), merged_df["value_y"])
+        return Intervals(merged_df[~pd.isna(merged_df["endtime"])][[starts.id_field, "starttime", "endtime", "type", "value"]],
+                         id_field=starts.id_field,
+                         type_field="type",
+                         value_field="value")
         
     def compress(self):
         """Returns a new TimeSeries with values compressed to the minimum size
@@ -957,8 +1074,13 @@ class Intervals(TimeSeriesQueryable):
         
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
-        interval_starts = self.df[self.start_time_field].astype(np.float64)
-        interval_ends = self.df[self.end_time_field].astype(np.float64)
+        if (pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+            interval_starts = (self.df[self.start_time_field].astype(int) / 10**9).astype(np.float64)
+            interval_ends = (self.df[self.end_time_field].astype(int) / 10**9).astype(np.float64)
+        else:
+            interval_starts = self.df[self.start_time_field].astype(np.float64)
+            interval_ends = self.df[self.end_time_field].astype(np.float64)
         interval_values = self.df[self.value_field]
         
         if convert_to_categorical and (
@@ -994,8 +1116,21 @@ class Intervals(TimeSeriesQueryable):
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        starts = np.array(start_times.get_times(), dtype=np.int64)
-        ends = np.array(end_times.get_times(), dtype=np.int64)
+        if (pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
+            pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+            starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
+        elif (not pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
+            not pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
+            not pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+            starts = np.array(start_times.get_times(), dtype=np.int64)
+            ends = np.array(end_times.get_times(), dtype=np.int64)
+        else:
+            raise ValueError("Start times, end times and event times must all be of the same type (either datetime or numeric)")
+
         assert (starts <= ends).all(), "Start times must be <= end times"
         
         event_ids, interval_starts, interval_ends, interval_values, uniques = self.prepare_aggregation_inputs(agg_func)
@@ -1071,12 +1206,13 @@ class Intervals(TimeSeriesQueryable):
 
 class IntervalSet(TimeSeriesQueryable):
     def __init__(self, df, type_field="intervaltype", start_time_field="starttime", end_time_field="endtime", value_field="value", id_field="id"):
-        self.df = df.sort_values([id_field, start_time_field], kind='stable')
+        self.df = df.sort_values([id_field, start_time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.start_time_field = start_time_field
         self.end_time_field = end_time_field
         self.value_field = value_field
         self.id_field = id_field
+        self.event_types = self.df[type_field].unique()
         
     def serialize(self):
         return {
@@ -1105,6 +1241,9 @@ class IntervalSet(TimeSeriesQueryable):
     
     def get_types(self):
         return self.df[self.type_field]
+    
+    def get_unique_types(self):
+        return self.event_types.copy()
     
     def get_start_times(self):
         return self.df[self.start_time_field]
@@ -1155,6 +1294,16 @@ class Duration(TimeSeriesQueryable):
         
     def value(self):
         return self._value
+    
+    def value_like(self, reference_type):
+        """Returns a value that can be used for arithmetic with the given object."""
+        if hasattr(reference_type, 'dtype'):
+            if pd.api.types.is_datetime64_any_dtype(reference_type.dtype):
+                return datetime.timedelta(seconds=self.value())
+            return self.value()
+        elif isinstance(reference_type, datetime.timedelta):
+            return datetime.timedelta(seconds=self.value())
+        return self.value()
     
     def __repr__(self):
         return f"<Duration {self.value()}s>"
@@ -1209,7 +1358,7 @@ class TimeIndex(TimeSeriesQueryable):
     def __init__(self, timesteps, id_field="id", time_field="time"):
         """timesteps: a dataframe with instance ID and whose values indicate
             times in the instance's trajectory."""
-        self.timesteps = timesteps.sort_values(id_field, kind='stable')
+        self.timesteps = timesteps.sort_values(id_field, kind='stable').reset_index(drop=True)
         self.time_field = time_field
         self.id_field = id_field
     
@@ -1320,6 +1469,14 @@ class TimeIndex(TimeSeriesQueryable):
             raise ValueError(f"Starts and ends must match IDs exactly")
         
         combined = pd.DataFrame({starts.id_field: starts.get_ids(), "start": starts.get_times(), "end": ends.get_times()})
+        is_dt = False
+        if pd.api.types.is_datetime64_any_dtype(combined["start"].dtype):
+            combined["start"] = (combined["start"].astype(int)/ 10**9).astype(int)
+            is_dt = True
+        if pd.api.types.is_datetime64_any_dtype(combined["end"].dtype):
+            combined["end"] = (combined["end"].astype(int)/ 10**9).astype(int)
+            is_dt = True
+            
         # remove nan times
         combined = combined.dropna(axis=0)
         start_df = (combined
@@ -1329,13 +1486,15 @@ class TimeIndex(TimeSeriesQueryable):
         # Remove timesteps where no value is present
         start_df = start_df[~pd.isna(start_df[starts.time_field])]
         start_df[starts.time_field] = start_df[starts.time_field].astype(np.int64)
+        if is_dt:
+            start_df[starts.time_field] = pd.to_datetime(start_df[starts.time_field], unit='s', origin='unix')
         return TimeIndex(start_df.reset_index(drop=True), id_field=starts.id_field, time_field=starts.time_field)
         
     def add(self, duration, invert_self=False):
         """duration: either a Duration or an Attributes containing durations in
             seconds"""
         if isinstance(duration, Duration):
-            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] + duration.value()}),
+            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] + duration.value_like(self.timesteps[self.time_field])}),
                              id_field=self.id_field,
                              time_field=self.time_field)
         elif isinstance(duration, Attributes):
@@ -1353,7 +1512,7 @@ class TimeIndex(TimeSeriesQueryable):
         """duration: either a Duration or an Attributes containing durations in
             seconds"""
         if isinstance(duration, Duration):
-            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] - duration.value()}),
+            return TimeIndex(self.timesteps.assign(**{self.time_field: self.timesteps[self.time_field] - duration.value_like(self.timesteps[self.time_field])}),
                              id_field=self.id_field,
                              time_field=self.time_field)
         elif isinstance(duration, Attributes):
@@ -1445,7 +1604,7 @@ class TimeSeries(TimeSeriesQueryable):
             will not be used.
         """
         self.index = index
-        self.series = series
+        self.series = series.reset_index(drop=True)
         if series.name in self.index.timesteps.columns:
             # The series probably derives from the time index
             self.series = self.series.rename(self.series.name + "_values")
