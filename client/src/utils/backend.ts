@@ -35,42 +35,42 @@ export function createBackendConnection(model: BackendModel) {
 
   // Action buttons configuration
   const actionButtons: ActionButton[] = [
-    // {
-    //   label: 'Template',
-    //   icon: '📝',
-    //   colorClass: 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white',
-    //   onClick: () => {
-    //     console.log('Template action clicked');
-    //     message.set('Template action executed');
-    //   }
-    // },
-    // {
-    //   label: 'Write',
-    //   icon: '✍️',
-    //   colorClass: 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white',
-    //   onClick: () => {
-    //     console.log('Write action clicked');
-    //     message.set('Write action executed');
-    //   }
-    // },
-    // {
-    //   label: 'Refine',
-    //   icon: '✨',
-    //   colorClass: 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white',
-    //   onClick: () => {
-    //     console.log('Refine action clicked');
-    //     message.set('Refine action executed');
-    //   }
-    // },
-    // {
-    //   label: 'Explain',
-    //   icon: '💡',
-    //   colorClass: 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white',
-    //   onClick: () => {
-    //     console.log('Explain action clicked');
-    //     message.set('Explain action executed');
-    //   }
-    // },
+    {
+      label: 'Template',
+      icon: '📝',
+      colorClass: 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white',
+      onClick: () => {
+        console.log('Template action clicked');
+        message.set('Template action executed');
+      }
+    },
+    {
+      label: 'Write',
+      icon: '✍️',
+      colorClass: 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white',
+      onClick: () => {
+        console.log('Write action clicked');
+        message.set('Write action executed');
+      }
+    },
+    {
+      label: 'Refine',
+      icon: '✨',
+      colorClass: 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white',
+      onClick: () => {
+        console.log('Refine action clicked');
+        message.set('Refine action executed');
+      }
+    },
+    {
+      label: 'Explain',
+      icon: '💡',
+      colorClass: 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white',
+      onClick: () => {
+        console.log('Explain action clicked');
+        message.set('Explain action executed');
+      }
+    },
     {
       label: 'Run',
       icon: '▶️',

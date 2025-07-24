@@ -392,10 +392,10 @@
   
   <!-- Action Buttons Section -->
   <div class="pt-2">
-    <div class="flex justify-end">
+    <div class="flex justify-end space-x-2">
       {#each actionButtons as btn}
         <button
-          class="px-4 py-2 bg-blue-600 dark:bg-purple-600 text-white border border-blue-600 dark:border-purple-600 rounded-md font-medium transition-all duration-200 hover:bg-blue-700 dark:hover:bg-purple-700 focus:ring-2 focus:ring-blue-500 dark:focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 flex items-center space-x-2 text-sm"
+          class="px-4 py-2 rounded-md font-medium transition-all duration-200 flex items-center space-x-2 text-sm {btn.label === 'Run' ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white border border-indigo-500 hover:border-indigo-600 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border border-blue-500 dark:border-blue-400 hover:bg-blue-50 dark:hover:bg-gray-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900'}"
           on:click={btn.onClick}
         >
           {#if btn.icon}

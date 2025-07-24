@@ -6,7 +6,7 @@
   import TextInputCard from './components/TextInputCard.svelte';
   import QueryResultCard from './components/QueryResultCard.svelte';
   import SQLDisplay from './components/SQLDisplay.svelte';
-  // import AIAssistantSection from './components/AIAssistantSection.svelte';
+  import AIAssistantSection from './components/AIAssistantSection.svelte';
   import StatusFooter from './components/StatusFooter.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
   import SubquerySection from './components/SubquerySection.svelte';
@@ -17,7 +17,7 @@
   const backend = createBackendConnection(model);
   
   // Destructure stores and functions for cleaner usage
-  const { message, values, idsLength, listNames, actionButtons, handleTextInput, subqueryEnabled, subqueries } = backend;
+  const { message, values, idsLength, listNames, actionButtons, handleTextInput, handleLLMQuestion, subqueryEnabled, subqueries, llmMessage, llmLoading, llmError, apiStatus } = backend;
   
   // Local state for text input
   let textInput = '';
@@ -26,9 +26,9 @@
   $: dataFields = $listNames || [];
   
   // Handle LLM question submission (now handled by backend)
-  // function handleLLMQuestionSubmit(question: string) {
-  //   handleLLMQuestion(question);
-  // }
+  function handleLLMQuestionSubmit(question: string) {
+    handleLLMQuestion(question);
+  }
 </script>
 
 <main class="w-full max-w-full mx-auto p-4 bg-white dark:bg-gray-950 min-h-screen transition-colors duration-200 relative">
@@ -74,7 +74,7 @@
   </div>
 
   <!-- AI Assistant Section -->
-  <!-- <div class="mb-2">
+  <div class="mb-2">
     <AIAssistantSection 
       onSubmit={handleLLMQuestionSubmit}
       message={$llmMessage}
@@ -83,7 +83,7 @@
       apiStatus={$apiStatus}
       width="w-full"
     />
-  </div> -->
+  </div>
 
   <!-- Status Footer -->
   <StatusFooter />

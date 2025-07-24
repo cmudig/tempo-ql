@@ -1094,3 +1094,7 @@ class QueryEngine:
     
     def set_macros(self, macros):
         self.eventtype_macros = macros
+    
+    def get_last_sql_query(self):
+        """Get the last SQL query that was executed by the dataset"""
+        return getattr(self.dataset, 'last_sql_query', None)

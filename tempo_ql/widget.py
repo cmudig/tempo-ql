@@ -10,12 +10,11 @@ import pandas as pd
 import math
 import json
 import asyncio
-# from google import genai
 
 # Now you can import from tempo-ql
 import sys
 from .evaluator import QueryEngine
-
+from .ai_assistant import AIAssistant
 from .utils import make_query_result_summary
 
 
@@ -61,7 +60,7 @@ class Widget(anywidget.AnyWidget):
     subquery_enabled = traitlets.Bool(False).tag(sync=True)
     subqueries = traitlets.Dict({}).tag(sync=True)
     
-    def __init__(self, query_engine: QueryEngine = None, *args, **kwargs):
+    def __init__(self, query_engine: QueryEngine = None, api_key: str = None, *args, **kwargs):
         # Extract dev parameter before passing to parent
         dev_mode = kwargs.pop('dev', False)
         
@@ -87,17 +86,11 @@ class Widget(anywidget.AnyWidget):
         else:
             self.query_engine_status = "No query engine available"
         
-        # LLM configuration - get API key from environment variable only
-        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
-        
-        # Initialize Google Generative AI client
-        if self.gemini_api_key:
-            self.genai_client = genai.Client(api_key=self.gemini_api_key)
-        else:
-            self.genai_client = None
+        # Initialize AI Assistant with the provided API key
+        self.ai_assistant = AIAssistant(api_key=api_key)
         
         # Set initial API status
-        self.api_status = self.get_gemini_api_key_status()
+        self.api_status = self.ai_assistant.get_status()
 
         self.ids = self.query_engine.get_ids()
         self.ids_length = len(self.ids)
@@ -109,14 +102,7 @@ class Widget(anywidget.AnyWidget):
         else:
             self.list_names = []
     
-    def get_gemini_api_key_status(self) -> str:
-        """Get the status of the Gemini API key"""
-        if not self.gemini_api_key:
-            return "Not configured - please set GEMINI_API_KEY environment variable"
-        elif len(self.gemini_api_key) < 10:
-            return "Invalid API key format"
-        else:
-            return f"Configured: {self.gemini_api_key[:10]}..."
+
     
     def _process_text_input(self, text: str):
         """Process text input and return result"""
@@ -174,46 +160,7 @@ class Widget(anywidget.AnyWidget):
         except Exception as e:
             return f"Error processing text: {str(e)}"
     
-    def _create_data_analysis_prompt(self, user_question: str, context: str = None) -> str:
-        """Create a context-aware prompt for data analysis"""
-        base_prompt = f"""You are a helpful data analysis assistant. You can help users understand their data and write queries.
 
-{context if context else ''}User Question: {user_question}
-
-Please provide a helpful response. If the user is asking about data analysis or queries, provide specific guidance. If they need help with Tempo-QL syntax, explain the concepts clearly."""
-        
-        return base_prompt
-    
-    def _call_gemini_api(self, prompt: str) -> str:
-        """Call the Gemini API and return the response"""
-        try:
-            if not self.genai_client:
-                return "Please set your GEMINI_API_KEY environment variable."
-            
-            response = self.genai_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            
-            return response.text
-                
-        except Exception as e:
-            raise Exception(f"Error calling Gemini API: {str(e)}")
-    
-    def _process_llm_question(self, question: str):
-        """Process LLM question and return response"""
-        try:
-            # Create context with available data fields
-            context = "Available data fields: patient_id, age, gender, diagnosis, medication, lab_result, vital_signs, procedure, visit_date, discharge_date\n\n"
-            prompt = self._create_data_analysis_prompt(question, context)
-            
-            # Call Gemini API
-            response = self._call_gemini_api(prompt)
-            
-            return response
-            
-        except Exception as e:
-            return f"Error: {str(e)}"
     
     @traitlets.observe('process_trigger')
     def _on_process_trigger(self, change):
@@ -246,8 +193,8 @@ Please provide a helpful response. If the user is asking about data analysis or 
             question = self.text_input.strip()
             if question:
                 try:
-                    # Process the LLM question
-                    response = self._process_llm_question(question)
+                    # Process the LLM question using AI Assistant
+                    response = self.ai_assistant.process_question(question, self.list_names)
                     self.llm_message = response
                     if response.startswith("Error:"):
                         self.llm_error = response
