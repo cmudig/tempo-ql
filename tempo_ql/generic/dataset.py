@@ -5,6 +5,7 @@ from sqlalchemy.exc import NoSuchTableError
 import pandas as pd
 import numpy as np
 import re
+import json
 import datetime
 from copy import deepcopy
 from ..data_types import *
@@ -57,7 +58,7 @@ class ConceptFilter:
         elif self.query_type == "in":
             filters = concept_col.isin(self.query_data)
         elif self.query_type in ("contains", "matches", "startswith", "endswith"):
-            filters = concept_col.astype(str).contains(self.pattern)
+            filters = concept_col.astype(str).str.contains(self.pattern)
         return filters
     
     def matches_value(self, value):
@@ -99,6 +100,17 @@ class GenericDataset:
         self.id_field_transform = id_field_transform or (lambda x: x)
         self.time_field_transform = time_field_transform or (lambda x: x)
         self._captured_queries = []
+        self._name_list_cache = {}
+        
+    def get_table_context(self):
+        """
+        Returns a string representation of the table context suitable for passing
+        to an LLM.
+        """
+        return json.dumps([
+            {k: v for k, v in table.items() if k not in ("id_field", "start_time_field", "end_time_field", "time_field")}
+            for table in self.tables
+        ])
         
     def __del__(self):
         if self.connection is not None: self.connection.close()
@@ -814,8 +826,14 @@ class GenericDataset:
         for table_info in self.tables:
             if scope is not None and 'scope' in table_info and scope != table_info.get('scope'):
                 continue
+            
+            cache_key = (table_info['source'], return_counts)
+            if cache_key in self._name_list_cache:
+                type_names += self._name_list_cache[cache_key]
+                
             table = self._get_table(table_info['source'])
             
+            scope_names = []
             if 'attributes' in table_info:
                 if return_counts:
                     with self.engine.connect() as conn:
@@ -827,8 +845,9 @@ class GenericDataset:
                         table_count = self._execute_query(conn, table_count).fetchone()[0]
                 else:
                     table_count = None
-                type_names.append(pd.DataFrame([{
+                scope_names.append(pd.DataFrame([{
                     'name': attr,
+                    'id': attr,
                     'type': 'attribute',
                     'scope': table_info.get('scope'),
                     **({'count': table_count} if table_count is not None else {})
@@ -846,12 +865,14 @@ class GenericDataset:
                             table, table_info['id_field']
                         ))
                         result = self._execute_query(conn, table_count).fetchone()[0]
-                        type_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                        scope_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                                                          'id': table_info[type_field],
                                                          'type': table_info['type'],
                                                          'scope': table_info.get('scope'), 
                                                          'count': result}]))
                 else:
-                    type_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                    scope_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                                                      'id': table_info[type_field], 
                                                      'scope': table_info.get('scope'),
                                                      'type': table_info['type']}]))
             elif 'event_type_field' in table_info or 'interval_type_field' in table_info:
@@ -869,10 +890,12 @@ class GenericDataset:
                     else:
                         stmt = select(distinct(table.c[table_info[type_field]].label('name')))
                     result = self._execute_query(conn, stmt)
-                    result_df = pd.DataFrame(result.fetchall(), columns=result.keys()).assign(
+                    result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                    result_df = result_df.assign(
+                        id=result_df['name'],
                         scope=table_info.get('scope'), 
                         type=table_info['type'])
-                    type_names.append(result_df)
+                    scope_names.append(result_df)
             elif 'events' in table_info or 'intervals' in table_info:
                 type_field = 'events' if 'events' in table_info else 'intervals'
                 with self.engine.connect() as conn:
@@ -888,12 +911,14 @@ class GenericDataset:
                                 
                             print("Getting count for", stmt)
                             result = self._execute_query(conn, stmt).fetchone()[0]
-                            type_names.append(pd.DataFrame([{'name': event, 
+                            scope_names.append(pd.DataFrame([{'name': event, 
+                                                              'id': event,
                                                              'scope': table_info.get('scope'), 
                                                              'count': result, 
                                                              'type': table_info['type']}]))
                         else:
-                            type_names.append(pd.DataFrame([{'name': table_info['event_type'], 
+                            scope_names.append(pd.DataFrame([{'name': table_info['event_type'], 
+                                                              'id': event,
                                                              'scope': table_info.get('scope'),
                                                              'type': table_info['type']}]))
             elif 'concept_id_field' in table_info:
@@ -918,18 +943,21 @@ class GenericDataset:
                 vocabulary_tables = union(*vocabulary_tables).cte('vocab')
                 with self.engine.connect() as conn:
                     stmt = select(
+                        vocabulary_tables.c['id'],
                         vocabulary_tables.c['name'],
                         *([func.count().label('count')] if return_counts else [])
                     ).distinct().select_from(
                         table.join(vocabulary_tables,
                                    table.c[table_info['concept_id_field']] == vocabulary_tables.c['id'])
-                    ).group_by(vocabulary_tables.c['name'])
+                    ).group_by(vocabulary_tables.c['name'], vocabulary_tables.c['id'])
                     result = self._execute_query(conn, stmt)
                     result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys())).assign(
                         scope=table_info.get('scope'),
                         type=table_info['type']
                     )
-                    type_names.append(result_df)
+                    scope_names.append(result_df)
+            self._name_list_cache[cache_key] = scope_names
+            type_names += scope_names
         
         if not type_names:
             return pd.DataFrame({'name': [], 'scope': [], 'type': [], **({'count': []} if return_counts else {})})

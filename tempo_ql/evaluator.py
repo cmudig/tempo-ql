@@ -109,7 +109,7 @@ UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 ?data_element_query_el: /id|name|type|value|scope/i ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
     | /id|name|type|value|scope/i ("IN"i) value_list                       -> data_element_in
     | /id|name|type|value|scope/i PATTERN_CMD LITERAL -> data_element_pattern
-    | /[^};'"`]+/i -> data_element_query_basic
+    | /(?!id|name|type|value|scope)[^};'"`]+/i -> data_element_query_basic
     
 PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
 DATA_NAME: /\{[^}]*\}/
@@ -1091,6 +1091,15 @@ class QueryEngine:
         else:
             parser = self.parser
         return parser.parse(query)
+    
+    def parse_data_element_query(self, query):
+        query_filter = self.parse("{" + query + "}" if not query.startswith("{") else query)
+        query_el = next(t for t in query_filter.iter_subtrees() if isinstance(t, lark.Tree) and t.data == "data_element")
+        query_evaluator = EvaluateQuery(self.dataset, 
+                                        eventtype_macros=self.eventtype_macros, 
+                                        variable_stores=self.variable_stores)
+        return query_evaluator.visit(query_el.children[0])
+
     
     def set_macros(self, macros):
         self.eventtype_macros = macros

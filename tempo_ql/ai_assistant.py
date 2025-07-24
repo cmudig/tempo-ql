@@ -1,7 +1,34 @@
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from google import genai
+from google.genai import types
+import json
+from tempo_ql.generic.dataset import ConceptFilter
 
+search_concepts_function = {
+    "name": "search_concepts",
+    "description": "Search for concepts that match a given query. Returns a list of up to 100 concept names that match the query.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "A Tempo data element query including either the `id` or the `name` field. The query is case-sensitive and you can use regex patterns in the query, for example: \"name contains /heart rate|hr/\""
+            },
+            "scope": {
+                "type": "string",
+                "description": "The scope in which to search for concepts. If not provided, searches all scopes (but this is not preferable)."
+            },
+        },
+        "required": [
+            "query"
+        ],
+        "propertyOrdering": [
+            "query",
+            "scope",
+        ]
+    }
+}
 
 class AIAssistant:
     """
@@ -9,13 +36,16 @@ class AIAssistant:
     Only functions when a valid API key is provided.
     """
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, query_engine, api_key: Optional[str] = None):
         """
         Initialize the AI Assistant with an optional API key.
         
         Args:
+            query_engine: A query engine used to retrieve data elements and parse
+                query strings.
             api_key: Gemini API key. If None, will try to get from GEMINI_API_KEY environment variable.
         """
+        self.query_engine = query_engine
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         self.genai_client = None
         self.is_enabled = False
@@ -24,6 +54,8 @@ class AIAssistant:
         if self.api_key and self._is_valid_api_key(self.api_key):
             try:
                 self.genai_client = genai.Client(api_key=self.api_key)
+                tools = types.Tool(function_declarations=[search_concepts_function])
+                self.config = types.GenerateContentConfig(tools=[tools])
                 self.is_enabled = True
             except Exception as e:
                 print(f"Warning: Failed to initialize Gemini client: {e}")
@@ -74,26 +106,26 @@ class AIAssistant:
         """
         return self.is_enabled and self.genai_client is not None
     
-    def _create_data_analysis_prompt(self, user_question: str, context: str = None) -> str:
+    def _create_data_analysis_prompt(self, user_question: str, table_context: str) -> str:
         """
         Create a context-aware prompt for data analysis.
         
         Args:
             user_question: The user's question
-            context: Optional context about available data fields
+            tables: String defining context about the available tables
             
         Returns:
             Formatted prompt for the AI model
         """
-        base_prompt = f"""You are a helpful data analysis assistant. You can help users understand their data and write queries.
+        with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
+            base_prompt = file.read()
 
-{context if context else ''}User Question: {user_question}
+        base_prompt = base_prompt.replace("<DATASET_INFO>", table_context)
+        base_prompt = base_prompt.replace("<INSTRUCTION>", user_question)
 
-Please provide a helpful response. If the user is asking about data analysis or queries, provide specific guidance. If they need help with Tempo-QL syntax, explain the concepts clearly."""
-        
         return base_prompt
     
-    def _call_gemini_api(self, prompt: str) -> str:
+    def _call_gemini_api(self, prompt: str, max_num_calls: int = 10) -> str:
         """
         Call the Gemini API and return the response.
         
@@ -109,24 +141,59 @@ Please provide a helpful response. If the user is asking about data analysis or 
         if not self.is_available():
             raise Exception("AI Assistant is not available. Please check your API key configuration.")
         
-        try:
-            response = self.genai_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
+        num_calls = 0
+        contents = [
+            types.Content(
+                role="user", parts=[types.Part(text=prompt)]
             )
+        ]
+        while num_calls < max_num_calls:
+            try:
+                response = self.genai_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=contents,
+                    config=self.config
+                )
+            except Exception as e:
+                raise Exception(f"Error calling Gemini API: {str(e)}")
             
-            return response.text
-                
-        except Exception as e:
-            raise Exception(f"Error calling Gemini API: {str(e)}")
+            print("Gemini response:", response.candidates[0].content)
+            if response.candidates[0].content.parts[0].function_call:
+                function_call = response.candidates[0].content.parts[0].function_call
+                if function_call.name == "search_concepts":
+                    try:
+                        args = function_call.args
+                        query_filter = self.query_engine.parse_data_element_query(args["query"])
+                        if ("name" in query_filter) == ("id" in query_filter):
+                            function_response = "The input query must select based on exactly one of 'name' or 'id'. Please try again."
+                        else:
+                            query_filter = ConceptFilter(*(query_filter['name'] if 'name' in query_filter else query_filter['id']))
+                            available_names = self.query_engine.dataset.list_names(scope=args["scope"], return_counts=True)
+                            matching_names = available_names[query_filter.filter_series(available_names["name"])]
+                            function_response = json.dumps(matching_names.head(100).to_dict(orient='records'))
+                            if len(matching_names) >= 100:
+                                function_response = "More than 100 concepts matched the query. The results are truncated.\n" + function_response
+                        print("Responding to function call:", function_response)
+                        function_response = types.Part.from_function_response(
+                            name=function_call.name,
+                            response={"result": function_response},
+                        )
+                        contents.append(response.candidates[0].content)
+                        contents.append(types.Content(role="user", parts=[function_response]))
+
+                    except Exception as e:
+                        raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
+            else:
+                return response.text
+            num_calls += 1
+        raise Exception("Gemini made too many function calls, aborting request.")
     
-    def process_question(self, question: str, data_fields: Optional[list] = None) -> str:
+    def process_question(self, question: str) -> str:
         """
         Process a user question and return an AI-generated response.
         
         Args:
             question: The user's question
-            data_fields: Optional list of available data fields for context
             
         Returns:
             AI-generated response to the question
@@ -134,21 +201,13 @@ Please provide a helpful response. If the user is asking about data analysis or 
         if not self.is_available():
             return "AI Assistant is not available. Please check your API key configuration."
         
-        try:
-            # Create context with available data fields
-            context = ""
-            if data_fields:
-                context = f"Available data fields: {', '.join(data_fields)}\n\n"
-            
-            prompt = self._create_data_analysis_prompt(question, context)
-            
-            # Call Gemini API
-            response = self._call_gemini_api(prompt)
-            
-            return response
-            
-        except Exception as e:
-            return f"Error: {str(e)}"
+        prompt = self._create_data_analysis_prompt(question, self.query_engine.dataset.get_table_context())
+        
+        # Call Gemini API
+        response = self._call_gemini_api(prompt)
+        
+        return response
+        
     
     def test_connection(self) -> Dict[str, Any]:
         """
