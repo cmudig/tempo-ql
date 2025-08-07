@@ -45,7 +45,7 @@ CUT_TYPE: /bins?/i|/quantiles?/i
 ?expr: variable_list time_index             -> time_series
     | expr "WHERE"i expr                    -> where_clause
     | expr "CARRY"i (time_quantity | step_quantity)  -> carry_clause
-    | expr "IMPUTE"i (VAR_NAME | LITERAL)            -> impute_clause
+    | expr "IMPUTE"i (expr | MEAN | MEDIAN)            -> impute_clause
     | expr "WITH"i VAR_NAME "AS"i logical   -> with_clause
     | expr "CUT"i cut_expr                  -> cut_clause
     | logical
@@ -130,6 +130,8 @@ BEFORE: "BEFORE"i
 AFTER: "AFTER"i
 FROM: "FROM"i
 TO: "TO"i
+MEAN: "MEAN"i
+MEDIAN: "MEDIAN"i
 
 LITERAL: SIGNED_NUMBER | QUOTED_STRING | /-?inf(inity)?/i | /\\/(?!\\/)(\\\\\/|\\\\\\\|[^\\/])*?\\/i?/
 QUOTED_STRING: /["'`][^"'`]*["'`]/
@@ -409,7 +411,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def atom(self, tree): return self.visit(tree.children[0])
     
     def unit_expr(self, tree): 
-        expr, unit = tree.children[0]
+        expr, unit = tree.children
         return self.visit(expr) / Duration(1, unit)
     
     def min_time(self, tree):
@@ -575,12 +577,12 @@ class EvaluateQuery(lark.visitors.Interpreter):
             return var_exp.impute(method=method, constant_value=constant_value)
         
         nan_mask = ~var_exp.isna()
-        if tree.children[1].value in ("mean", "median"):
+        if isinstance(tree.children[1], lark.Token) and tree.children[1].value in ("mean", "median"):
             impute_method = tree.children[1].value.lower()
             numpy_func = {"mean": np.nanmean, "median": np.nanmedian}[impute_method]
             return var_exp.replace(pd.NA, np.nan).astype(np.float64).where(nan_mask, numpy_func(var_exp.get_values().replace(pd.NA, np.nan).astype(float)))
         else:
-            impute_method = self._parse_literal(tree.children[1].value)
+            impute_method = self.visit(tree.children[1])
             dtype = var_exp.get_values().dtype
             if isinstance(dtype, pd.CategoricalDtype):
                 var_exp = var_exp.with_values(var_exp.get_values().astype(dtype.categories.dtype))
@@ -589,6 +591,10 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 # convert all values to strings
                 var_exp = var_exp.with_values(var_exp.get_values().astype(pd.StringDtype()))
                 dtype = var_exp.get_values().dtype
+            
+            if hasattr(impute_method, "get_values"):
+                return var_exp.with_values(var_exp.get_values().where(nan_mask, make_aligned_value_series(var_exp, impute_method).astype(dtype)))
+            
             scalar = dtype.type(impute_method)
             return var_exp.with_values(var_exp.get_values().where(nan_mask, scalar))
             

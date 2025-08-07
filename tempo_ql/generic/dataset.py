@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, MetaData, Table, Column, select, or_, case, union, func, distinct, literal, insert, cast, String, null
+from sqlalchemy import create_engine, MetaData, Table, Column, select, or_, case, union, func, distinct, literal, insert, cast, String, null, text
 from sqlalchemy.types import Interval, Integer, DateTime
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import NoSuchTableError
@@ -82,8 +82,46 @@ class GenericDataset:
                  schema_name=None, 
                  scratch_schema_name='auto', 
                  verbose=False,
+                 id_field_joins=None,
                  id_field_transform=None,
                  time_field_transform=None):
+        """
+        Args:
+        * connection_string: A SQLAlchemy connection string for the database.
+        * tables: A list of dictionaries describing the tables that can be
+            accessed in the database and the types of data they contain.
+        * vocabularies: A list of dictionaries describing the concept mapping 
+            tables that are available.
+        * schema_name: A schema prefix for the source names in the tables list.
+        * scratch_schema_name: Schema to use for tables written by this object
+            in the database. If not provided or 'auto', uses the schema_name
+            parameter.
+        * verbose: Whether to log the database operations as they are performed.
+        * id_field_joins: If provided, a dictionary specifying how to join tables
+            with alternative id fields to other tables to achieve a table with the
+            desired id field. The dictionary's keys should be table source names (specified
+            in the tables list) and the values should be dictionaries with the 
+            following keys:
+            * dest_table: A table to join to the source table
+            * join_key: Field that should be joined on in both source and 
+                destination tables (will be used as both src_join_key and dest_join_key)
+            * src_join_key: Field that should be joined on in the source table 
+            * dest_join_key: Field that should be joined on in the destination
+                table
+            * keep_fields: Additional fields to keep from the destination table.
+            * join_type: The type of join that should be used ('left', 'inner',
+                'right', where the left table is the source table). Defaults to
+                'inner'
+            * where_clause: A lambda function that takes both tables as SQLAlchemy
+                Table objects and returns a SQLAlchemy expression that will be
+                used to filter the results. If not provided, no filtering is done.
+            The table that results from the join should contain a field corresponding
+            to the id_field specified in the tables list.
+        * id_field_transform: A SQLAlchemy-compatible function to apply on the
+            ID fields. **This will be computed in the database.**
+        * time_field_transform: A SQLAlchemy-compatible function to apply on the
+            time fields. **This will be computed in the database.**
+        """
         self.engine = create_engine(connection_string, 
                                     **({"execution_options": {"schema_translate_map": {None: schema_name}}} if schema_name is not None else {}))
         self.metadata = MetaData(schema=schema_name)
@@ -99,8 +137,10 @@ class GenericDataset:
         self.verbose = verbose
         self.id_field_transform = id_field_transform or (lambda x: x)
         self.time_field_transform = time_field_transform or (lambda x: x)
+        self.id_field_joins = id_field_joins or {}
         self._captured_queries = []
         self._name_list_cache = {}
+        self._cte_cache = {}
         
     def get_table_context(self):
         """
@@ -115,13 +155,55 @@ class GenericDataset:
     def __del__(self):
         if self.connection is not None: self.connection.close()
         
-    def _get_table(self, table_name):
+    def _get_table(self, table_info):
         """Attempt to get the SQLAlchemy Table reference from the existing metadata,
-        or autoload it."""
+        or autoload it. Also join the table as needed to get the relevant ID fields."""
         try:
-            return self.metadata.tables[table_name]
+            table = self.metadata.tables[table_info["source"]]
         except KeyError:
-            return Table(table_name, self.metadata, autoload_with=self.engine)
+            table = Table(table_info["source"], self.metadata, autoload_with=self.engine)
+            
+        if table_info["source"] in self.id_field_joins:
+            if table_info["source"] not in self._cte_cache:
+                join_info = self.id_field_joins[table_info["source"]]
+                if "dest_table" not in join_info:
+                    raise ValueError(f"ID field join information for table {table_info['source']} needs a 'dest_table' key")
+                if "src_join_key" not in join_info and "join_key" not in join_info:
+                    raise ValueError(f"ID field join information for table {table_info['source']} needs 'src_join_key' or 'join_key'")
+                try:
+                    dest_table = self.metadata.tables[join_info["dest_table"]]
+                except KeyError:
+                    dest_table = Table(join_info["dest_table"], self.metadata, autoload_with=self.engine)
+                    
+                join_type = join_info.get("join_type", "inner")
+                src_join_key = join_info.get("src_join_key", join_info.get("join_key"))
+                dest_join_key = join_info.get("dest_join_key", join_info.get("join_key"))
+                if join_type in ("left", "inner"):
+                    join_clause = table.join(
+                        dest_table, 
+                        table.c[src_join_key] == dest_table.c[dest_join_key],
+                        isouter=join_type == "left"
+                    )
+                elif join_type == "right":
+                    join_clause = dest_table.join(
+                        table, 
+                        table.c[src_join_key] == dest_table.c[dest_join_key],
+                        isouter=True
+                    )
+                else:
+                    raise ValueError(f"ID field join type for table {table_info['source']} should be 'left', 'inner', or 'right', not '{join_type}'")
+                
+                stmt = select(
+                    *table.c,
+                    dest_table.c[table_info["id_field"]],
+                    *(dest_table.c[f] for f in join_info.get("keep_fields", []) if f != table_info["id_field"])
+                ).select_from(join_clause)
+                if "where_clause" in join_info:
+                    stmt = stmt.where(join_info["where_clause"](table, dest_table))
+                    
+                self._cte_cache[table_info["source"]] = stmt.cte(f"{table_info['source']}_id_joined")
+            return self._cte_cache[table_info["source"]]
+        return table
         
     def _limit_trajectory_ids(self, base_table, id_field):
         """
@@ -142,7 +224,7 @@ class GenericDataset:
         with self.engine.connect() as conn:
             unioned_tables = union(*(
                 select(
-                    distinct(self.id_field_transform(self._get_table(table["source"]).c[table["id_field"]])).label("id")
+                    distinct(self.id_field_transform(self._get_table(table).c[table["id_field"]])).label("id")
                 ) for table in self.tables
                 if "source" in table and "id_field" in table
             )).cte('all_ids')
@@ -194,7 +276,7 @@ class GenericDataset:
         with self.engine.connect() as conn:
             scopes = {}
             for vocabulary in self.vocabularies:
-                if scope is not None and "scopes" in vocabulary and scope not in vocabulary["scopes"]:
+                if scope is not None and not (scope in vocabulary.get("scopes", []) or scope == vocabulary.get("scope")):
                     continue
                 
                 concept_id_field = vocabulary.get('concept_id_field', 'concept_id')
@@ -202,16 +284,17 @@ class GenericDataset:
                 if "source" not in vocabulary: raise ValueError("Vocabulary must have a source")
                 
                 if concept_id_query is not None:
-                    filters = concept_id_query.filter_db(self._get_table(vocabulary['source']).c[concept_id_field])
+                    filters = concept_id_query.filter_db(self._get_table(vocabulary).c[concept_id_field])
                 if concept_name_query is not None:
-                    filters = concept_name_query.filter_db(self._get_table(vocabulary['source']).c[concept_name_field])
+                    filters = concept_name_query.filter_db(self._get_table(vocabulary).c[concept_name_field])
                 
                 if self.verbose:
                     print(f"Searching vocabulary {vocabulary['source']} for id {concept_id_query} and name {concept_name_query}")
                 stmt = select(
-                    self._get_table(vocabulary['source']).c[concept_id_field],
-                    self._get_table(vocabulary['source']).c[concept_name_field],
-                    self._get_table(vocabulary['source']).c[vocabulary.get('scope_field', 'scope')]
+                    self._get_table(vocabulary).c[concept_id_field],
+                    self._get_table(vocabulary).c[concept_name_field],
+                    (self._get_table(vocabulary).c[vocabulary.get('scope_field', 'scope')]
+                     if 'scope' not in vocabulary else literal(vocabulary['scope']))
                 ).where(or_(*filters))
                 result = self._execute_query(conn, stmt).fetchall()
                 for row in result:
@@ -234,48 +317,51 @@ class GenericDataset:
             if concept_name_query.query_data not in table_info['attributes']: continue
             attr_info = table_info['attributes'][concept_name_query.query_data]
             
+            value_transform = attr_info.get('value_transform', lambda x: x)
+            
             with self.engine.connect() as conn:
                 if attr_info.get('convert_concept', False):
                     # Join the attribute table with the concept table to get the 
                     # concept names for each concept ID stored in the value field
                     matching_vocabs = [vocab for vocab in self.vocabularies
-                                       if "scope" not in attr_info or attr_info["scope"] in vocab["scopes"]]
+                                       if "scope" not in attr_info or attr_info["scope"] in vocab.get("scopes", []) or attr_info["scope"] == vocab.get("scope")]
                     if not matching_vocabs:
                         raise ValueError(f"No vocabularies match scope '{attr_info.get('scope')}' specified for attribute '{concept_name_query.query_data}'")
                     unioned_vocabs = union(*(
                         select(
-                            self._get_table(vocab["source"]).c[vocab.get("concept_id_field", "concept_id")].label("concept_id"),
-                            self._get_table(vocab["source"]).c[vocab.get("concept_name_field", "concept_name")].label("concept_name"),
-                            self._get_table(vocab["source"]).c[vocab.get("scope_field", "scope")].label("scope"),
+                            self._get_table(vocab).c[vocab.get("concept_id_field", "concept_id")].label("concept_id"),
+                            self._get_table(vocab).c[vocab.get("concept_name_field", "concept_name")].label("concept_name"),
+                            (self._get_table(vocab).c[vocab.get("scope_field", "scope")]
+                             if "scope" not in vocab else literal(vocab["scope"])).label("scope"),
                         ) for vocab in matching_vocabs
                     ))
                     stmt = select(
-                        self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]),
-                        case(
+                        self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]),
+                        value_transform(case(
                             (unioned_vocabs.c.concept_name != None,
                             unioned_vocabs.c.concept_name),
                             else_=cast(
-                                self._get_table(table_name).c[attr_info['value_field']],
+                                self._get_table(table_info).c[attr_info['value_field']],
                                 String
                             )
-                        ).label(attr_info['value_field'])
+                        )).label(attr_info['value_field'])
                     ).distinct().select_from(
                         self._limit_trajectory_ids(
-                            self._get_table(table_name), 
+                            self._get_table(table_info), 
                             table_info['id_field']
                         ).join(
                             unioned_vocabs, 
-                            self._get_table(table_name).c[attr_info['value_field']] == unioned_vocabs.c.concept_id,
+                            self._get_table(table_info).c[attr_info['value_field']] == unioned_vocabs.c.concept_id,
                             isouter=True
                         ))
                     if self.verbose:
                         print(f"Querying table {table_name} for attribute {concept_name_query.query_data} while joining to {len(matching_vocabs)} vocabulary(ies)")
                 else:
                     stmt = select(
-                        self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]),
-                        self._get_table(table_name).c[attr_info['value_field']]
+                        self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]),
+                        value_transform(self._get_table(table_info).c[attr_info['value_field']]).label(attr_info['value_field'])
                     ).distinct().select_from(self._limit_trajectory_ids(
-                        self._get_table(table_name), 
+                        self._get_table(table_info), 
                         table_info['id_field']
                     ))
                     if self.verbose:
@@ -316,19 +402,20 @@ class GenericDataset:
 
                         matching_event = table_info['events'][matching_key]
                         vf = matching_event.get('value_field')
+                        value_transform = matching_event.get('value_transform', lambda x: x)
                         with self.engine.connect() as conn:
                             # Extract the rows matching query
                             stmt = select(
-                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['time_field']]).label('time'),
+                                self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['time_field']]).label('time'),
                                 literal(matching_key).label('eventtype'),
-                                *([self._get_table(table_name).c[vf].label('value')] if vf is not None else [null().label('value')])
+                                *([value_transform(self._get_table(table_info).c[vf]).label('value')] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
-                                self._get_table(table_name), 
+                                self._get_table(table_info), 
                                 table_info['id_field']
                             ))
                             if matching_event.get('filter_nulls', False) and vf is not None:
-                                stmt = stmt.where(self._get_table(table_name).c[vf] != None)
+                                stmt = stmt.where(self._get_table(table_info).c[vf] != None)
                             if self.verbose:
                                 print(f"Searching table {table_name} for event named {matching_key}")
                             result = self._execute_query(conn, stmt)
@@ -343,12 +430,12 @@ class GenericDataset:
                         if 'event_type' in table_info:
                             # Extract the entire table
                             stmt = select(
-                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['time_field']]).label('time'),
+                                self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['time_field']]).label('time'),
                                 literal(table_info['event_type']).label('eventtype'),
-                                *([self._get_table(table_name).c[vf].label('value')] if vf is not None else [null().label('value')])
+                                *([self._get_table(table_info).c[vf].label('value')] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
-                                self._get_table(table_name), 
+                                self._get_table(table_info), 
                                 table_info['id_field']
                             ))
                             if self.verbose:
@@ -356,20 +443,20 @@ class GenericDataset:
                         else:
                             # Extract the rows matching query
                             stmt = select(
-                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['time_field']]).label('time'),
-                                self._get_table(table_name).c[table_info['event_type_field']].label('eventtype'),
-                                *([self._get_table(table_name).c[vf].label('value')] if vf is not None else [null().label('value')])
+                                self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['time_field']]).label('time'),
+                                self._get_table(table_info).c[table_info['event_type_field']].label('eventtype'),
+                                *([self._get_table(table_info).c[vf].label('value')] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
-                                self._get_table(table_name), 
+                                self._get_table(table_info), 
                                 table_info['id_field']
                             )).where(
-                                or_(*name_query.filter_db(self._get_table(table_name).c[table_info['event_type_field']]))
+                                or_(*name_query.filter_db(self._get_table(table_info).c[table_info['event_type_field']]))
                             )
                             if self.verbose:
                                 print(f"Searching table {table_name} for rows where event type field matches {name_query}")
                         if table_info.get('filter_nulls', False) and vf is not None:
-                            stmt = stmt.where(self._get_table(table_name).c[vf] != None)
+                            stmt = stmt.where(self._get_table(table_info).c[vf] != None)
                         result = self._execute_query(conn, stmt)
                         result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
                         candidates.setdefault(table_scope, []).append(result_df)
@@ -381,20 +468,21 @@ class GenericDataset:
 
                         matching_event = table_info['intervals'][matching_key]
                         vf = matching_event.get('value_field')
+                        value_transform = matching_event.get('value_transform', lambda x: x)
                         with self.engine.connect() as conn:
                             # Extract the rows matching query
                             stmt = select(
-                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['start_time_field']]).label('starttime'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['end_time_field']]).label('endtime'),
+                                self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['start_time_field']]).label('starttime'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['end_time_field']]).label('endtime'),
                                 literal(matching_key).label('intervaltype'),
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [null().label('value')])
+                                *([value_transform(self._get_table(table_info).c[vf]).label('value')] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
-                                self._get_table(table_name), 
+                                self._get_table(table_info), 
                                 table_info['id_field']
                             ))
                             if matching_event.get('filter_nulls', False) and vf is not None:
-                                stmt = stmt.where(self._get_table(table_name).c[vf] != None)
+                                stmt = stmt.where(self._get_table(table_info).c[vf] != None)
                             if self.verbose:
                                 print(f"Searching table {table_name} for interval named {matching_key}")
                             result = self._execute_query(conn, stmt)
@@ -409,13 +497,13 @@ class GenericDataset:
                         if 'interval_type' in table_info:
                             # Extract the entire table
                             stmt = select(
-                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['start_time_field']]).label('starttime'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['end_time_field']]).label('endtime'),
+                                self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['start_time_field']]).label('starttime'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['end_time_field']]).label('endtime'),
                                 literal(table_info['interval_type']).label('intervaltype'),
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [null().label('value')])
+                                *([self._get_table(table_info).c[vf]] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
-                                self._get_table(table_name), 
+                                self._get_table(table_info), 
                                 table_info['id_field']
                             ))
                             if self.verbose:
@@ -423,21 +511,21 @@ class GenericDataset:
                         else:
                             # Extract the rows matching query
                             stmt = select(
-                                self.id_field_transform(self._get_table(table_name).c[table_info['id_field']]).label('id'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['start_time_field']]).label('starttime'),
-                                self.time_field_transform(self._get_table(table_name).c[table_info['end_time_field']]).label('endtime'),
-                                self._get_table(table_name).c[table_info['interval_type_field']],
-                                *([self._get_table(table_name).c[vf]] if vf is not None else [null().label('value')])
+                                self.id_field_transform(self._get_table(table_info).c[table_info['id_field']]).label('id'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['start_time_field']]).label('starttime'),
+                                self.time_field_transform(self._get_table(table_info).c[table_info['end_time_field']]).label('endtime'),
+                                self._get_table(table_info).c[table_info['interval_type_field']].label('intervaltype'),
+                                *([self._get_table(table_info).c[vf]] if vf is not None else [null().label('value')])
                             ).select_from(self._limit_trajectory_ids(
-                                self._get_table(table_name), 
+                                self._get_table(table_info), 
                                 table_info['id_field']
                             )).where(
-                                or_(*name_query.filter_db(self._get_table(table_name).c[table_info['interval_type_field']]))
+                                or_(*name_query.filter_db(self._get_table(table_info).c[table_info['interval_type_field']]))
                             )
                             if self.verbose:
                                 print(f"Searching table {table_name} for rows where interval type field matches {name_query}")
                         if table_info.get('filter_nulls', False) and vf is not None:
-                            stmt = stmt.where(self._get_table(table_name).c[vf] != None)
+                            stmt = stmt.where(self._get_table(table_info).c[vf] != None)
                         result = self._execute_query(conn, stmt)
                         result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
                         candidates.setdefault(table_scope, []).append(result_df)
@@ -475,7 +563,7 @@ class GenericDataset:
             return union(*(self._base_query_for_table(table_info, value_field=v['value_field'], constant_type=k)
                            for k, v in table_info['intervals']))
             
-        table = self._get_table(table_info['source'])
+        table = self._get_table(table_info)
         if table_info['type'] == 'event':
             table_fields = [self.id_field_transform(table.c[table_info['id_field']]).label('id'), 
                             self.time_field_transform(table.c[table_info['time_field']]).label('time')]
@@ -483,9 +571,10 @@ class GenericDataset:
             
         elif table_info['type'] == 'interval':
             table_fields = [self.id_field_transform(table.c[table_info['id_field']]).label('id'),
-                            self.time_field_transform(table.c[table_info['start_time_field']]).label('start_time'), 
-                            case((table.c[table_info['end_time_field']] == None, table.c[table_info['start_time_field']]),
-                                 self.time_field_transform(table.c[table_info['end_time_field']])).label('end_time')]
+                            self.time_field_transform(table.c[table_info['start_time_field']]).label('starttime'), 
+                            case((table.c[table_info['end_time_field']] == None, 
+                                  table.c[table_info['start_time_field']]),
+                                 else_=self.time_field_transform(table.c[table_info['end_time_field']])).label('endtime')]
             type_field_name = 'intervaltype'
         
         if constant_type is not None:
@@ -547,7 +636,7 @@ class GenericDataset:
             if "source" not in table_info: continue
             if "concept_id_field" not in table_info: continue
             
-            table = self._get_table(table_info['source'])
+            table = self._get_table(table_info)
             if value_field is not None:
                 if value_field not in table.c:
                     raise AttributeError(f"Value field '{value_field}' not present in scope {scope}")
@@ -583,17 +672,17 @@ class GenericDataset:
         with self.engine.connect() as conn:
             all_times = union(
                 *(select(
-                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['start_time_field']]).label('mintime')
+                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info).c[scope_info['start_time_field']]).label('mintime')
                 ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info['source']), 
+                    self._get_table(scope_info), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
                 *(select(
-                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['time_field']]).label('mintime')
+                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('mintime')
                 ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info['source']), 
+                    self._get_table(scope_info), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
             ).cte('all_times')
@@ -610,24 +699,27 @@ class GenericDataset:
         with self.engine.connect() as conn:
             all_times = union(
                 *(select(
-                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['end_time_field']]).label('maxtime')
+                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info).c[scope_info['end_time_field']]).label('maxtime')
                 ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info['source']), 
+                    self._get_table(scope_info), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
                 *(select(
-                    self.id_field_transform(self._get_table(scope_info['source']).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info['source']).c[scope_info['time_field']]).label('maxtime')
+                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                    self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('maxtime')
                 ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info['source']), 
+                    self._get_table(scope_info), 
                     scope_info['id_field']
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
             ).cte('all_times')
-            increment = datetime.timedelta(seconds=1) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
-            stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + increment).label('maxtime')).group_by(all_times.c.id)
-            # print(stmt.compile(compile_kwargs={"literal_binds": True}))
-            result = self._execute_query(conn, stmt)
+            try:
+                increment = datetime.timedelta(seconds=1) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
+                stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + cast(increment, Interval)).label('maxtime')).group_by(all_times.c.id)
+                result = self._execute_query(conn, stmt)
+            except:
+                stmt = select(all_times.c.id, func.datetime_add(func.max(all_times.c.maxtime), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
+                result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
             return Attributes(result_df.set_index('id')['maxtime'])
         
@@ -801,7 +893,7 @@ class GenericDataset:
         arbitrary_table_info = next((t for t in self.tables if "source" in t and "id_field" in t), None)
         if not arbitrary_table_info:
             raise ValueError("No tables have a source and an ID field, cannot infer ID field type")
-        id_field_type = self.id_field_transform(self._get_table(arbitrary_table_info['source']).c[arbitrary_table_info['id_field']]).type
+        id_field_type = self.id_field_transform(self._get_table(arbitrary_table_info).c[arbitrary_table_info['id_field']]).type
         self._trajectory_id_table = Table(TRAJECTORY_ID_TABLE_NAME, 
                                           self.metadata,
                                           Column(TRAJECTORY_ID_TABLE_ID_FIELD, id_field_type, primary_key=True),
@@ -824,15 +916,18 @@ class GenericDataset:
         """
         type_names = []
         for table_info in self.tables:
-            if scope is not None and 'scope' in table_info and scope != table_info.get('scope'):
+            if scope is not None and ('scope' not in table_info or scope != table_info.get('scope')):
                 continue
             
             cache_key = (table_info['source'], return_counts)
             if cache_key in self._name_list_cache:
                 type_names += self._name_list_cache[cache_key]
+                continue
                 
-            table = self._get_table(table_info['source'])
-            
+            table = self._get_table(table_info)
+            if self.verbose:
+                print(f"Retrieving concepts for table '{table_info['source']}'")
+                
             scope_names = []
             if 'attributes' in table_info:
                 if return_counts:
@@ -932,7 +1027,7 @@ class GenericDataset:
                     concept_name_field = vocabulary.get('concept_name_field', 'concept_name')
                     if "source" not in vocabulary: raise ValueError("Vocabulary must have a source")
                     
-                    vocab_table = self._get_table(vocabulary['source'])
+                    vocab_table = self._get_table(vocabulary)
                     vocab_stmt = select(
                         vocab_table.c[concept_id_field].label("id"),
                         vocab_table.c[concept_name_field].label("name")

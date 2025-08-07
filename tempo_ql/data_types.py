@@ -127,6 +127,13 @@ def union_data(lhs, rhs):
         result = result.with_values(result.get_values().astype(cast_dtype))
     return result
     
+def is_datetime_or_timedelta(dtype):
+    """Check if a dtype is datetime or timedelta using pandas api.types."""
+    return (
+        pd.api.types.is_datetime64_any_dtype(dtype)
+        or pd.api.types.is_timedelta64_dtype(dtype)
+    )
+    
 EXCLUDE_SERIES_METHODS = ("_repr_latex_",)
 
 class TimeSeriesQueryable:
@@ -565,7 +572,7 @@ class Attributes(TimeSeriesQueryable):
         if isinstance(other, Attributes):
             return Attributes(self.preserve_nans(getattr(self.series, opname)(other.series).rename(self.name)))
         if isinstance(other, Duration):
-            if pd.api.types.is_datetime64_any_dtype(self.series.dtype):
+            if is_datetime_or_timedelta(self.series.dtype):
                 duration = datetime.timedelta(seconds=other.value())
             else:
                 duration = other.value()
@@ -730,7 +737,7 @@ class Events(TimeSeriesQueryable):
         
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
-        if pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype):
+        if is_datetime_or_timedelta(self.df[self.time_field].dtype):
             event_times = (self.df[self.time_field].astype(int)/ 10**9).astype(np.float64)
         else:
             event_times = self.df[self.time_field].astype(np.float64)
@@ -767,14 +774,14 @@ class Events(TimeSeriesQueryable):
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        if (pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
-            pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
-            pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype)):
+        if (is_datetime_or_timedelta(start_times.get_times().dtype) and
+            is_datetime_or_timedelta(end_times.get_times().dtype) and
+            is_datetime_or_timedelta(self.df[self.time_field].dtype)):
             starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
             ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
-        elif (not pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
-            not pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
-            not pd.api.types.is_datetime64_any_dtype(self.df[self.time_field].dtype)):
+        elif (not is_datetime_or_timedelta(start_times.get_times().dtype) and
+            not is_datetime_or_timedelta(end_times.get_times().dtype) and
+            not is_datetime_or_timedelta(self.df[self.time_field].dtype)):
             starts = np.array(start_times.get_times(), dtype=np.int64)
             ends = np.array(end_times.get_times(), dtype=np.int64)
         else:
@@ -1074,8 +1081,8 @@ class Intervals(TimeSeriesQueryable):
         
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
-        if (pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
-            pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+        if (is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
+            is_datetime_or_timedelta(self.df[self.end_time_field].dtype)):
             interval_starts = (self.df[self.start_time_field].astype(int) / 10**9).astype(np.float64)
             interval_ends = (self.df[self.end_time_field].astype(int) / 10**9).astype(np.float64)
         else:
@@ -1116,16 +1123,16 @@ class Intervals(TimeSeriesQueryable):
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        if (pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
-            pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
-            pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
-            pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+        if (is_datetime_or_timedelta(start_times.get_times().dtype) and
+            is_datetime_or_timedelta(end_times.get_times().dtype) and
+            is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
+            is_datetime_or_timedelta(self.df[self.end_time_field].dtype)):
             starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
             ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
-        elif (not pd.api.types.is_datetime64_any_dtype(start_times.get_times().dtype) and
-            not pd.api.types.is_datetime64_any_dtype(end_times.get_times().dtype) and
-            not pd.api.types.is_datetime64_any_dtype(self.df[self.start_time_field].dtype) and
-            not pd.api.types.is_datetime64_any_dtype(self.df[self.end_time_field].dtype)):
+        elif (not is_datetime_or_timedelta(start_times.get_times().dtype) and
+            not is_datetime_or_timedelta(end_times.get_times().dtype) and
+            not is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
+            not is_datetime_or_timedelta(self.df[self.end_time_field].dtype)):
             starts = np.array(start_times.get_times(), dtype=np.int64)
             ends = np.array(end_times.get_times(), dtype=np.int64)
         else:
@@ -1298,7 +1305,7 @@ class Duration(TimeSeriesQueryable):
     def value_like(self, reference_type):
         """Returns a value that can be used for arithmetic with the given object."""
         if hasattr(reference_type, 'dtype'):
-            if pd.api.types.is_datetime64_any_dtype(reference_type.dtype):
+            if is_datetime_or_timedelta(reference_type.dtype):
                 return datetime.timedelta(seconds=self.value())
             return self.value()
         elif isinstance(reference_type, datetime.timedelta):
@@ -1470,10 +1477,10 @@ class TimeIndex(TimeSeriesQueryable):
         
         combined = pd.DataFrame({starts.id_field: starts.get_ids(), "start": starts.get_times(), "end": ends.get_times()})
         is_dt = False
-        if pd.api.types.is_datetime64_any_dtype(combined["start"].dtype):
+        if is_datetime_or_timedelta(combined["start"].dtype):
             combined["start"] = (combined["start"].astype(int)/ 10**9).astype(int)
             is_dt = True
-        if pd.api.types.is_datetime64_any_dtype(combined["end"].dtype):
+        if is_datetime_or_timedelta(combined["end"].dtype):
             combined["end"] = (combined["end"].astype(int)/ 10**9).astype(int)
             is_dt = True
             
