@@ -10,6 +10,7 @@
   export let values: QueryResult | null = null;
   export let idsLength: number = 0;
   export let width: string = 'w-full max-w-2xl';
+  export let scrollable: boolean = false;
 
   let showCountDetails = false;
   let showMissingnessDetails = false;
@@ -31,7 +32,7 @@
   $: console.log('values', values);
 </script>
 
-<div class="bg-white dark:bg-gray-900 p-4 mb-0 border-0 rounded-none {width} transition-colors duration-200">
+<div class="bg-white dark:bg-gray-900 p-4 mb-0 border-0 rounded-none {width} transition-colors duration-200 {scrollable ? 'h-full overflow-y-auto' : ''}">
   <!-- Header with share icon -->
   <div class="flex items-center justify-between mb-2">
     <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Query Result</h3>

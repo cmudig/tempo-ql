@@ -24,11 +24,31 @@ export function createBackendConnection(model: BackendModel) {
   const subqueryEnabled = traitlet(model, 'subquery_enabled', false);
   const subqueries = traitlet(model, 'subqueries', {});
   
+  // Text input traitlet
+  const textInput = traitlet(model, 'text_input', '');
+  
+  // Data Elements tab traitlet
+  const scopes = traitlet(model, 'scopes', []);
+  const selectedScope = traitlet(model, 'selected_scope', '');
+  const scopeConcepts = traitlet(model, 'scope_concepts', {});
+  
+  // Loading state traitlet
+  const isLoading = traitlet(model, 'isLoading', false);
+  const loadingMessage = traitlet(model, 'loadingMessage', '');
+  
   // LLM traitlets
   const llmMessage = traitlet(model, 'llm_message', '');
   const llmLoading = traitlet(model, 'llm_loading', false);
   const llmError = traitlet(model, 'llm_error', '');
   const apiStatus = traitlet(model, 'api_status', 'Checking API connection...');
+  const llmQuestion = traitlet(model, 'llm_question', '');
+  const llmMode = traitlet(model, 'llm_mode', 'generate');
+  
+  // Processed AI response traitlets
+  const extractedQuery = traitlet(model, 'extracted_query', '');
+  const aiExplanation = traitlet(model, 'ai_explanation', '');
+  const hasExtractedQuery = traitlet(model, 'has_extracted_query', false);
+
 
   // Store text input separately
   let currentTextInput = '';
@@ -99,10 +119,19 @@ export function createBackendConnection(model: BackendModel) {
     listNames,
     subqueryEnabled,
     subqueries,
+    scopes,
+    selectedScope,
+    scopeConcepts,
+    isLoading,
+    loadingMessage,
     llmMessage,
     llmLoading,
     llmError,
     apiStatus,
+    extractedQuery,
+    aiExplanation,
+    hasExtractedQuery,
+    textInputStore: textInput,
     
     // Action buttons
     actionButtons,
@@ -129,12 +158,41 @@ export function createBackendConnection(model: BackendModel) {
     },
     
     // LLM question handler
-    handleLLMQuestion: (question: string) => {
-      console.log('🤖 LLM Question submitted:', question);
+    handleLLMQuestion: (question: string, mode: string = 'generate') => {
+      console.log('🤖 LLM Question submitted:', question, 'Mode:', mode);
       
-      // Store the question in text_input and trigger LLM processing
-      model.set('text_input', question);
+      // Set the question and mode in the dedicated traitlets and trigger LLM processing
+      model.set('llm_question', question);
+      model.set('llm_mode', mode);
       model.set('llm_trigger', 'ask');  // Trigger LLM processing
+      model.save_changes();
+    },
+    
+    // Query extraction handler - triggered when AI extracts a query
+    handleQueryExtraction: () => {
+      // Get the extracted query and update the text input
+      let currentExtractedQuery = '';
+      extractedQuery.subscribe(val => currentExtractedQuery = val)();
+
+      if (currentExtractedQuery && currentExtractedQuery !== currentTextInput) {
+        console.log('🔄 Query extracted from AI response:', currentExtractedQuery);
+        console.log('🔄 Current text input:', currentTextInput);
+        console.log('🔄 Updating text input with extracted query');
+        currentTextInput = currentExtractedQuery;
+        model.set('text_input', currentExtractedQuery);
+        model.save_changes();
+      } else if (currentExtractedQuery === currentTextInput) {
+        console.log('🔄 Extracted query is same as current input, no update needed');
+      }
+    },
+    
+    // Scope analysis handler
+    handleScopeAnalysis: (scopeName: string, forceRefresh: boolean = false) => {
+      console.log('🔍 Scope Analysis requested for:', scopeName, forceRefresh ? '(force refresh)' : '');
+      
+      // Trigger scope analysis with force refresh flag
+      const triggerValue = forceRefresh ? `${scopeName}:force` : scopeName;
+      model.set('scope_analysis_trigger', triggerValue);
       model.save_changes();
     },
     

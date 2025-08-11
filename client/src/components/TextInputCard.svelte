@@ -1,5 +1,4 @@
 <script lang="ts">
-  import type { ActionButton } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { getAutocompleteOptions, performAutocomplete } from '../utils/autocomplete';
   import { theme } from '../stores/theme';
@@ -8,9 +7,12 @@
   
   export let value: string = '';
   export let onInput: (val: string) => void = () => {};
-  export let actionButtons: ActionButton[] = [];
   export let width: string = 'w-full max-w-2xl';
   export let dataFields: string[] = [];
+  export let onRun: () => void = () => {};
+  export let onExplain: () => void = () => {};
+  export let onHistoryClick: () => void = () => {};
+
   
   let textarea: HTMLTextAreaElement;
   let autocompleteContainer: HTMLDivElement;
@@ -47,11 +49,23 @@
   
   // Update highlighting when value changes
   $: if (highlightedView && value !== undefined) {
-    highlightedView.innerText = formatQueryForHighlights(value);
+    // Default highlight is the current value
+    let displayText = value;
+    // If showing a fix preview, we render diffs inside the overlay below, not here
+    highlightedView.innerText = formatQueryForHighlights(displayText);
     highlight({
       selector: `#${highlightedViewID}`,
       patterns: highlightPatterns,
     });
+  }
+  
+  // Update textarea when value changes externally (e.g., from AI extraction)
+  $: if (textarea && value !== undefined && textarea.value !== value) {
+    console.log('🔄 TextInputCard: Updating textarea with external value:', value);
+    textarea.value = value;
+    autoResize(textarea);
+    // Add to undo history for external updates
+    addToHistory(value);
   }
   
   function handleClickOutside(event: MouseEvent) {
@@ -347,7 +361,7 @@
     <textarea
       id="text-input"
       bind:this={textarea}
-      class="w-full p-6 bg-transparent font-mono text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+      class="w-full p-6 pr-32 bg-transparent font-mono text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[120px] relative z-20"
       placeholder="// Write your Tempo-QL query here... (Ctrl+Z to undo, Ctrl+Y to redo)"
       bind:value
       on:input={handleInput}
@@ -361,10 +375,50 @@
     
     <!-- Syntax Highlighting Overlay -->
     <div
-      class="absolute top-0 left-0 w-full h-full p-6 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words"
+      class="absolute top-0 left-0 w-full h-full p-6 pr-32 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words"
       id={highlightedViewID}
       bind:this={highlightedView}
     ></div>
+
+
+    
+    <!-- History Button in top-right corner -->
+    <button
+      on:click={onHistoryClick}
+      class="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-all duration-200 flex items-center justify-center z-30 query-history-button"
+      title="View query history"
+    >
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+      </svg>
+    </button>
+    
+    <!-- Buttons inside text area -->
+    <div class="absolute bottom-2 right-2 flex space-x-2 z-30">
+      <!-- Explain Button -->
+      <button
+        class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 flex items-center space-x-1.5 text-xs bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border border-emerald-500 hover:border-emerald-600 focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 shadow-sm hover:shadow"
+        on:click={onExplain}
+        disabled={!value.trim()}
+        class:opacity-50={!value.trim()}
+        class:cursor-not-allowed={!value.trim()}
+      >
+        <span class="text-xs">💡</span>
+        <span>Explain</span>
+      </button>
+      
+      <!-- Run Button -->
+      <button
+        class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 flex items-center space-x-1.5 text-xs bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white border border-indigo-500 hover:border-indigo-600 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 shadow-sm hover:shadow"
+        on:click={onRun}
+        disabled={!value.trim()}
+        class:opacity-50={!value.trim()}
+        class:cursor-not-allowed={!value.trim()}
+      >
+        <span class="text-xs">▶️</span>
+        <span>Run</span>
+      </button>
+    </div>
     
     <!-- Autocomplete Dropdown -->
     {#if showAutocomplete && autocompleteOptions.length > 0}
@@ -375,7 +429,10 @@
         {#each autocompleteOptions as option, index}
           <div
             class="px-4 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors {index === selectedIndex ? 'bg-blue-600 text-white' : 'text-gray-700 dark:text-gray-200'}"
+            role="button"
+            tabindex="0"
             on:click={() => selectAutocompleteOption(option)}
+            on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectAutocompleteOption(option); } }}
             on:mouseenter={() => selectedIndex = index}
           >
             <div class="flex items-center justify-between">
@@ -390,22 +447,7 @@
     {/if}
   </div>
   
-  <!-- Action Buttons Section -->
-  <div class="pt-2">
-    <div class="flex justify-end space-x-2">
-      {#each actionButtons as btn}
-        <button
-          class="px-4 py-2 rounded-md font-medium transition-all duration-200 flex items-center space-x-2 text-sm {btn.label === 'Run' ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white border border-indigo-500 hover:border-indigo-600 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border border-blue-500 dark:border-blue-400 hover:bg-blue-50 dark:hover:bg-gray-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900'}"
-          on:click={btn.onClick}
-        >
-          {#if btn.icon}
-            <span class="text-sm">{btn.icon}</span>
-          {/if}
-          <span>{btn.label}</span>
-        </button>
-      {/each}
-    </div>
-  </div>
+
 </div>
 
 <style>
