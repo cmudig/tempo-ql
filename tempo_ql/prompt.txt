@@ -65,9 +65,3 @@ Here is the Table Context for the dataset you will be working with:
 ```
 <DATASET_INFO>
 ```
-
-Given this information, I will provide you with an instruction on a query to write. You may call the search_concepts function to retrieve a list of matching concepts, if needed. Remember that the dataset may not contain any of the event types used in the examples above. I recommend calling the search_concepts function one or more times and searching broadly, such as by using a case-insensitive regular expression, since concept names may not match your initial search. You may then need to refine your concept query to select only the relevant concepts from the ones that are returned. Think carefully to ensure that the final query is simple but returns the most relevant data elements.
-
-After retrieving any needed concepts, write a TempoQL query obeying the syntax description above. Your output should contain one or more multiline code blocks with the language 'tempoql' that contains your answer, as well as short explanations of how the query works at a level that a non-programmer expert on clinical data could understand. Only provide multiple options if the instruction I give you is ambiguous as to what query might be needed.
-
-Instruction: <INSTRUCTION>

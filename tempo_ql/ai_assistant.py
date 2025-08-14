@@ -120,13 +120,20 @@ class AIAssistant:
         """
         with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
             base_prompt = file.read()
+        base_prompt += """
+Given this information, I will provide you with an instruction on a query to write. You may call the search_concepts function to retrieve a list of matching concepts, if needed. Remember that the dataset may not contain any of the event types used in the examples above. I recommend calling the search_concepts function one or more times and searching broadly, such as by using a case-insensitive regular expression, since concept names may not match your initial search. You may then need to refine your concept query to select only the relevant concepts from the ones that are returned. Think carefully to ensure that the final query is simple but returns the most relevant data elements.
+
+After retrieving any needed concepts, write a TempoQL query obeying the syntax description above. Your output should contain one or more multiline code blocks with the language 'tempoql' that contains your answer, as well as short explanations of how the query works at a level that a non-programmer expert on clinical data could understand. Only provide multiple options if the instruction I give you is ambiguous as to what query might be needed.
+
+Instruction: <INSTRUCTION>
+"""
 
         base_prompt = base_prompt.replace("<DATASET_INFO>", table_context)
         base_prompt = base_prompt.replace("<INSTRUCTION>", user_question)
 
         return base_prompt
     
-    def _create_explain_prompt(self, question: str) -> str:
+    def _create_explain_prompt(self, question: str, table_context: str) -> str:
         """
         Create a prompt for explaining TempoQL queries.
         
@@ -136,19 +143,19 @@ class AIAssistant:
         Returns:
             Formatted prompt for explaining queries
         """
-        return f"""You are a TempoQL expert assistant. The user has written a TempoQL query and wants you to explain what it does.
+        with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
+            base_prompt = file.read()
+        return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
+Given this information, I have written a TempoQL query below and I would like you to explain what it does. 
+You do not need to call any functions to produce your explanation.
+Be clear, concise and friendly but professional, and do not include praise.
+Include each of the following in your response if applicable:
+1. What data the query extracts from the dataset
+2. How the data is transformed
+3. Aggregation expressions used to structure the data
 
-Please provide a clear, detailed explanation of the TempoQL query including:
-1. What data it's querying
-2. What temporal operations it's performing
-3. What the expected output would be
-4. Any important details about the query structure
-
-Be educational and help the user understand how TempoQL works.
-
-User's request: {question}
-
-Please provide a comprehensive explanation in a friendly, educational tone."""
+Query: {question}
+"""
 
     def _create_fix_prompt(self, failed_query: str, error_message: str, table_context: str) -> str:
         """
@@ -480,7 +487,7 @@ Please format your response with:
                         'raw_response': "I can only explain TempoQL queries. Please provide a TempoQL query in your question for me to explain, or use the regular 'Ask' feature to generate a new query.",
                         'error': False
                     }
-                prompt = self._create_explain_prompt(question)
+                prompt = self._create_explain_prompt(question, self.query_engine.dataset.get_table_context())
             elif mode == "fix":
                 # For fix mode, we need the failed query and error message
                 if not failed_query or not error_message:

@@ -739,8 +739,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
         duration = self.visit(tree.children[1])
                 
         if tree.children[2] is not None:
-            start_time = self._make_time_index(self.visit(tree.children[2].children[0]))
-            end_time = self._make_time_index(self.visit(tree.children[2].children[1]))
+            start_el, end_el, _ = self.visit(tree.children[2])
+            start_time = self._make_time_index(start_el)
+            end_time = self._make_time_index(end_el)
         else:
             start_time = self._make_time_index(self.min_time(lark.Tree('', [])))
             end_time = self._make_time_index(self.max_time(lark.Tree('', [])))
@@ -952,11 +953,16 @@ class EvaluateQuery(lark.visitors.Interpreter):
             subqueries = {}
             for subtree, query_info in self._subqueries.items():
                 # map each subquery to its location in the original query text
-                min_pos = min(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
-                max_pos = max(token.end_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
-                print(list((token.start_pos, token.end_pos) for token in subtree.scan_values(lambda x: isinstance(x, lark.Token))), query_string[min_pos:max_pos])
-                if max_pos - min_pos == len(query_string.strip()): continue
-                subqueries[query_string[min_pos:max_pos]] = query_info
+                initial_min_pos = min(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
+                min_pos = max((token.end_pos for token in tree.scan_values(lambda x: isinstance(x, lark.Token)) if token.end_pos <= initial_min_pos), default=-1) + 1
+                # for the maximum token, find the minimum position of the *next* leaf in the tree
+                initial_max_pos = max(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
+                max_pos = min((token.start_pos for token in tree.scan_values(lambda x: isinstance(x, lark.Token)) if token.start_pos > initial_max_pos), default=len(query_string))
+                
+                subquery = query_string[min_pos:max_pos].strip()
+                print(list((token.start_pos, token.end_pos) for token in subtree.scan_values(lambda x: isinstance(x, lark.Token))), subquery)
+                if subquery == query_string.strip(): continue
+                subqueries[subquery] = query_info
             result = (result, subqueries)
         self._subqueries = None
         return result
