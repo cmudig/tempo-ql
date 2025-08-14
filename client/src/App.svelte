@@ -34,6 +34,7 @@
     llmMessage,
     llmLoading,
     llmError,
+    llmEnabled,
     apiStatus,
     isLoading,
     loadingMessage,
@@ -479,20 +480,14 @@
 </script>
 
 <main
-  class="w-full max-w-full mx-auto bg-white dark:bg-gray-950 h-screen transition-colors duration-200 relative overflow-hidden"
+  class="w-full bg-white dark:bg-slate-950 transition-colors duration-200 relative overflow-hidden flex flex-col"
+  style="height: 600px;"
 >
-  <!-- Loading Bar -->
-  <LoadingBar isLoading={$isLoading} message={$loadingMessage} />
-
-  <div class="absolute top-4 right-4 z-10">
-    <ThemeToggle />
-  </div>
-
   <!-- Tab Bar -->
   <TabBar {activeTab} onTabChange={handleTabChange} />
 
   <!-- Tab Content -->
-  <div class="p-4 h-[calc(100vh-4rem)] overflow-hidden">
+  <div class="flex-auto w-full min-h-0 z-0">
     {#if activeTab === 'data-elements'}
       <DataElementsTab
         width="w-full"
@@ -532,6 +527,7 @@
         llmMessage={$llmMessage}
         llmLoading={$llmLoading}
         llmError={$llmError}
+        llmEnabled={$llmEnabled}
         apiStatus={$apiStatus}
         extractedQuery={$extractedQuery}
         aiExplanation={$aiExplanation}
@@ -546,9 +542,6 @@
       />
     {/if}
   </div>
-
-  <!-- Status Footer -->
-  <StatusFooter />
 
   <!-- History Dropdown Component -->
   <HistoryDropdown
@@ -567,6 +560,9 @@
     onSelect={handleQueryHistorySelect}
     position={queryHistoryDropdownPosition}
   />
+
+  <!-- Loading Bar -->
+  <LoadingBar isLoading={$isLoading} message={$loadingMessage} />
 </main>
 
 <style>

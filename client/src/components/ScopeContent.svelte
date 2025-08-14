@@ -1,5 +1,7 @@
 <script lang="ts">
+  import Fa from 'svelte-fa';
   import SliceMetricBar from './charts/SliceMetricBar.svelte';
+  import { faSearch } from '@fortawesome/free-solid-svg-icons';
 
   export let scopeName: string = '';
   export let isAnalyzed: boolean = false;
@@ -25,19 +27,10 @@
   $: sortedConcepts = [...concepts].sort((a, b) => b.count - a.count);
 </script>
 
-<div class="w-full">
+<div class="w-full flex-auto">
   {#if isLoading}
     <!-- Loading State -->
     <div class="text-center py-16">
-      <div class="text-8xl mb-6 animate-pulse">🔍</div>
-      <h3 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
-        Analyzing {scopeName}...
-      </h3>
-      <p class="text-gray-600 dark:text-gray-400 max-w-md mx-auto mb-8">
-        {loadingMessage ||
-          'Discovering data elements, concepts, and structure...'}
-      </p>
-
       <!-- Loading Animation -->
       <div class="flex justify-center mb-8">
         <div class="relative">
@@ -57,34 +50,6 @@
         </div>
       </div>
 
-      <!-- Progress Steps -->
-      <div class="max-w-md mx-auto space-y-3">
-        <div
-          class="flex items-center space-x-3 text-sm text-gray-600 dark:text-gray-400"
-        >
-          <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span>Connecting to dataset...</span>
-        </div>
-        <div
-          class="flex items-center space-x-3 text-sm text-gray-600 dark:text-gray-400"
-        >
-          <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span>Retrieving concept data...</span>
-        </div>
-        <div
-          class="flex items-center space-x-3 text-sm text-gray-600 dark:text-gray-400"
-        >
-          <div class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span>Processing and aggregating results...</span>
-        </div>
-        <div
-          class="flex items-center space-x-3 text-sm text-gray-400 dark:text-gray-500"
-        >
-          <div class="w-2 h-2 bg-gray-300 dark:bg-gray-600 rounded-full"></div>
-          <span>Preparing visualization...</span>
-        </div>
-      </div>
-
       <!-- Current Status -->
       {#if loadingMessage}
         <div
@@ -101,24 +66,24 @@
     </div>
   {:else if !isAnalyzed}
     <!-- Not Analyzed State -->
-    <div class="text-center py-16">
-      <div class="text-8xl mb-6">🔍</div>
-      <h3 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
-        Analyze {scopeName}
-      </h3>
-      <p class="text-gray-600 dark:text-gray-400 max-w-md mx-auto mb-8">
-        Click the button below to analyze this table and discover its data
-        elements, concepts, and structure.
+    <div
+      class="flex flex-col w-full h-full items-center justify-center text-center gap-4"
+    >
+      <div
+        class="w-1/2 text-slate-700 dark:text-slate-200 text-lg font-semibold"
+      >
+        Data elements not retrieved yet
+      </div>
+      <p class="text-slate-600 dark:text-slate-400 w-1/3">
+        Click below to retrieve available data elements in this scope.
       </p>
       <button
-        class="px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:focus:ring-blue-600"
+        class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-md"
         on:click={onAnalyze}
         disabled={isLoading}
       >
-        <span class="flex items-center space-x-2">
-          <span class="text-xl">🔍</span>
-          <span>Start Analysis</span>
-        </span>
+        <Fa icon={faSearch} class="inline mr-2" />
+        Load Data Elements for <span class="font-mono">{scopeName}</span>
       </button>
     </div>
   {:else}
@@ -182,18 +147,20 @@
       {/if}
       <!-- Fixed Header Section -->
       <div
-        class="bg-gray-50 dark:bg-gray-800 rounded-t-lg border border-gray-200 dark:border-gray-700"
+        class="bg-slate-50 dark:bg-slate-800 rounded-t-lg border border-slate-200 dark:border-slate-700"
       >
         <div class="grid grid-cols-3 gap-4 px-6 py-4">
-          <div class="font-semibold text-gray-900 dark:text-gray-100">
-            Concept Name
+          <div class="font-semibold text-slate-900 dark:text-slate-100">
+            Data Element
           </div>
-          <div class="font-semibold text-gray-900 dark:text-gray-100">Type</div>
-          <div class="font-semibold text-gray-900 dark:text-gray-100">
+          <div class="font-semibold text-slate-900 dark:text-slate-100">
+            Type
+          </div>
+          <div class="font-semibold text-slate-900 dark:text-slate-100">
             Count
             {#if totalCount > 0}
               <span
-                class="text-sm font-normal text-gray-600 dark:text-gray-400"
+                class="text-sm font-normal text-slate-600 dark:text-slate-400"
               >
                 (Total: {totalCount.toLocaleString()})
               </span>
@@ -204,38 +171,33 @@
 
       <!-- Scrollable Table Body -->
       <div
-        class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-b-lg overflow-hidden"
+        class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-b-lg overflow-hidden"
       >
         <div class="max-h-96 overflow-y-auto custom-scrollbar">
           {#if sortedConcepts.length > 0}
             {#each sortedConcepts as concept, index}
               <div
-                class="grid grid-cols-3 gap-4 px-6 py-4 border-b border-gray-100 dark:border-gray-800 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-150"
+                class="grid grid-cols-3 gap-4 px-6 py-4 border-b border-slate-100 dark:border-slate-800 last:border-b-0 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors duration-150"
               >
                 <div
-                  class="text-gray-900 dark:text-gray-100 font-medium truncate"
+                  class="text-slate-900 dark:text-slate-100 font-medium truncate"
                   title={concept.name}
                 >
                   {concept.name}
                 </div>
-                <div class="text-gray-600 dark:text-gray-400">
+                <div class="text-slate-600 dark:text-slate-400">
                   <span
                     class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {concept.type ===
                     'event'
                       ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
                       : concept.type === 'interval'
                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                        : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}"
+                        : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200'}"
                   >
                     {concept.type}
                   </span>
                 </div>
                 <div class="flex flex-col space-y-2">
-                  <div
-                    class="text-gray-600 dark:text-gray-400 font-mono text-sm"
-                  >
-                    {concept.count.toLocaleString()}
-                  </div>
                   {#if totalCount > 0}
                     <div class="flex flex-col space-y-1">
                       <div class="w-32">
@@ -249,18 +211,22 @@
                           horizontalLayout={true}
                         />
                       </div>
-                      <div
-                        class="text-xs text-gray-500 dark:text-gray-400 font-mono text-center"
-                      >
-                        {concept.count.toLocaleString()} / {totalCount.toLocaleString()}
-                      </div>
                     </div>
                   {/if}
+                  <div
+                    class="text-slate-600 dark:text-slate-200 font-mono text-sm"
+                  >
+                    {concept.count.toLocaleString()}<span class="opacity-80">
+                      &nbsp;/&nbsp;{totalCount.toLocaleString()}</span
+                    >
+                  </div>
                 </div>
               </div>
             {/each}
           {:else}
-            <div class="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
+            <div
+              class="px-6 py-8 text-center text-slate-500 dark:text-slate-400"
+            >
               No concepts found for this scope.
             </div>
           {/if}
@@ -269,7 +235,7 @@
 
       <!-- Summary -->
       {#if concepts.length > 0}
-        <div class="mt-4 text-sm text-gray-600 dark:text-gray-400">
+        <div class="mt-4 text-sm text-slate-600 dark:text-slate-400">
           Found {concepts.length} concept{concepts.length !== 1 ? 's' : ''} in {scopeName}
         </div>
       {/if}

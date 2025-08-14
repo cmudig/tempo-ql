@@ -41,6 +41,7 @@ export function createBackendConnection(model: BackendModel) {
   const loadingMessage = traitlet(model, 'loadingMessage', '');
 
   // LLM traitlets
+  const llmEnabled = traitlet(model, 'llm_enabled', false);
   const llmMessage = traitlet(model, 'llm_message', '');
   const llmLoading = traitlet(model, 'llm_loading', false);
   const llmError = traitlet(model, 'llm_error', '');
@@ -135,6 +136,7 @@ export function createBackendConnection(model: BackendModel) {
     llmMessage,
     llmLoading,
     llmError,
+    llmEnabled,
     apiStatus,
     extractedQuery,
     aiExplanation,

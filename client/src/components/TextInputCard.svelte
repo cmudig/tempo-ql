@@ -12,6 +12,8 @@
     highlightPatterns,
     formatQueryForHighlights,
   } from '../utils/syntaxHighlight';
+  import Fa from 'svelte-fa';
+  import { faClock, faPlay } from '@fortawesome/free-solid-svg-icons';
 
   export let value: string = '';
   export let onInput: (val: string) => void = () => {};
@@ -69,12 +71,7 @@
 
   // Update textarea when value changes externally (e.g., from AI extraction)
   $: if (textarea && value !== undefined && textarea.value !== value) {
-    console.log(
-      '🔄 TextInputCard: Updating textarea with external value:',
-      value
-    );
     textarea.value = value;
-    autoResize(textarea);
     // Add to undo history for external updates
     addToHistory(value);
   }
@@ -134,7 +131,6 @@
       // Update textarea
       if (textarea) {
         textarea.value = previousValue;
-        autoResize(textarea);
         textarea.focus();
       }
 
@@ -159,7 +155,6 @@
       // Update textarea
       if (textarea) {
         textarea.value = nextValue;
-        autoResize(textarea);
         textarea.focus();
       }
 
@@ -186,7 +181,6 @@
     addToHistory(newValue);
 
     onInput(newValue);
-    autoResize(target);
 
     // Update cursor position
     cursorPosition = target.selectionStart || 0;
@@ -399,30 +393,15 @@
     showAutocomplete = false;
     console.log('🔍 selectAutocompleteOption - Autocomplete hidden');
   }
-
-  function autoResize(element: HTMLTextAreaElement) {
-    // Reset height to auto to get the correct scrollHeight
-    element.style.height = 'auto';
-    // Set the height to the scrollHeight to fit all content
-    element.style.height = element.scrollHeight + 'px';
-  }
-
-  // Auto-resize when value changes
-  $: if (textarea && value) {
-    // Use setTimeout to ensure DOM is updated
-    setTimeout(() => autoResize(textarea), 0);
-  }
 </script>
 
-<div
-  class="bg-white dark:bg-gray-900 p-4 mb-0 border-0 rounded-none {width} transition-colors duration-200"
->
+<div class="p-4 {width} flex flex-col h-full">
   <!-- Text Input Section -->
-  <div class="mb-2 relative">
+  <div class="mb-2 relative flex-auto">
     <textarea
       id="text-input"
       bind:this={textarea}
-      class="w-full p-6 pr-32 bg-transparent font-mono text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+      class="w-full h-full p-6 pr-32 bg-transparent font-mono text-sm bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
       placeholder="// Write your Tempo-QL query here... (Ctrl+Z to undo, Ctrl+Y to redo)"
       bind:value
       on:input={handleInput}
@@ -430,11 +409,6 @@
       rows="1"
       style="color: transparent; caret-color: currentColor;"
     />
-
-    <!-- Background for textarea -->
-    <div
-      class="absolute top-0 left-0 w-full h-full p-6 bg-gray-100 dark:bg-gray-800 rounded-md pointer-events-none z-0"
-    ></div>
 
     <!-- Syntax Highlighting Overlay -->
     <div
@@ -446,64 +420,24 @@
     <!-- History Button in top-right corner -->
     <button
       on:click={onHistoryClick}
-      class="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-all duration-200 flex items-center justify-center z-30 query-history-button"
+      class="absolute top-2 right-2 px-3 py-2 z-30 rounded-md bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white transition-colors duration-200"
       title="View query history"
     >
-      <svg
-        class="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-        ></path>
-      </svg>
+      <Fa icon={faClock} />
     </button>
-
-    <!-- Buttons inside text area -->
-    <div class="absolute bottom-2 right-2 flex space-x-2 z-30">
-      <!-- Explain Button -->
-      <button
-        class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 flex items-center space-x-1.5 text-xs bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white border border-emerald-500 hover:border-emerald-600 focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 shadow-sm hover:shadow"
-        on:click={onExplain}
-        disabled={!value.trim()}
-        class:opacity-50={!value.trim()}
-        class:cursor-not-allowed={!value.trim()}
-      >
-        <span class="text-xs">💡</span>
-        <span>Explain</span>
-      </button>
-
-      <!-- Run Button -->
-      <button
-        class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 flex items-center space-x-1.5 text-xs bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white border border-indigo-500 hover:border-indigo-600 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 shadow-sm hover:shadow"
-        on:click={onRun}
-        disabled={!value.trim()}
-        class:opacity-50={!value.trim()}
-        class:cursor-not-allowed={!value.trim()}
-      >
-        <span class="text-xs">▶️</span>
-        <span>Run</span>
-      </button>
-    </div>
 
     <!-- Autocomplete Dropdown -->
     {#if showAutocomplete && autocompleteOptions.length > 0}
       <div
         bind:this={autocompleteContainer}
-        class="absolute z-30 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-xl max-h-48 overflow-y-auto"
+        class="absolute z-30 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md shadow-xl max-h-48 overflow-y-auto"
       >
         {#each autocompleteOptions as option, index}
           <div
-            class="px-4 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors {index ===
+            class="px-4 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors {index ===
             selectedIndex
               ? 'bg-blue-600 text-white'
-              : 'text-gray-700 dark:text-gray-200'}"
+              : 'text-slate-700 dark:text-slate-200'}"
             role="button"
             tabindex="0"
             on:click={() => selectAutocompleteOption(option)}
@@ -518,7 +452,7 @@
             <div class="flex items-center justify-between">
               <span class="font-mono text-sm">{option.value}</span>
               <span
-                class="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+                class="text-xs px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
               >
                 {option.type === 'data_item' ? 'field' : 'const'}
               </span>
@@ -527,6 +461,30 @@
         {/each}
       </div>
     {/if}
+  </div>
+  <div class="shrink-0 w-full flex justify-end items-center gap-2 my-2">
+    <!-- Explain Button -->
+    <button
+      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600"
+      on:click={onExplain}
+      disabled={!value.trim()}
+      class:opacity-50={!value.trim()}
+      class:cursor-not-allowed={!value.trim()}
+    >
+      Explain
+    </button>
+
+    <!-- Run Button -->
+    <button
+      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white"
+      on:click={onRun}
+      disabled={!value.trim()}
+      class:opacity-50={!value.trim()}
+      class:cursor-not-allowed={!value.trim()}
+    >
+      <Fa icon={faPlay} class="inline mr-2" />
+      Run
+    </button>
   </div>
 </div>
 

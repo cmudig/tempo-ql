@@ -33,6 +33,7 @@ class TempoQLWidget(anywidget.AnyWidget):
     message = traitlets.Unicode("").tag(sync=True)
     
     # AI Assistant
+    llm_available = traitlets.Bool(False).tag(sync=True)
     llm_trigger = traitlets.Unicode("").tag(sync=True)
     llm_question = traitlets.Unicode("").tag(sync=True)
     llm_mode = traitlets.Unicode("generate").tag(sync=True)  # "generate" or "explain"
@@ -111,6 +112,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         
         # Initialize AI Assistant
         self.ai_assistant = AIAssistant(query_engine=query_engine, api_key=api_key)
+        self.llm_available = self.ai_assistant.is_enabled
         self.api_status = self.ai_assistant.get_status()
         
         # Initialize Scope Analyzer
