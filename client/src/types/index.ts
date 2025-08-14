@@ -11,4 +11,4 @@ export interface ActionButton {
   icon?: string;
   colorClass?: string;
   onClick: () => void;
-} 
+}

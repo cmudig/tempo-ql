@@ -22,32 +22,45 @@
   }
 </script>
 
-<div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md mb-2 overflow-hidden">
+<div
+  class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md mb-2 overflow-hidden"
+>
   <!-- Header with dropdown arrow -->
   <button
     on:click={toggleExpanded}
     class="w-full px-3 py-2 text-left flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200 focus:outline-none"
   >
-    <span class="text-sm font-mono text-gray-700 dark:text-gray-300 truncate flex-1">
+    <span
+      class="text-sm font-mono text-gray-700 dark:text-gray-300 truncate flex-1"
+    >
       {queryText}
     </span>
     <svg
-      class="w-4 h-4 text-gray-500 dark:text-gray-400 transform transition-transform duration-200 {isExpanded ? 'rotate-180' : ''}"
+      class="w-4 h-4 text-gray-500 dark:text-gray-400 transform transition-transform duration-200 {isExpanded
+        ? 'rotate-180'
+        : ''}"
       fill="none"
       stroke="currentColor"
       viewBox="0 0 24 24"
     >
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        d="M19 9l-7 7-7-7"
+      />
     </svg>
   </button>
 
   {#if isExpanded}
     <div class="px-3 pb-3 border-t border-gray-200 dark:border-gray-700">
       <!-- Full subquery text display -->
-      <div class="mt-3 mb-3 p-2 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono text-gray-700 dark:text-gray-300">
+      <div
+        class="mt-3 mb-3 p-2 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono text-gray-700 dark:text-gray-300"
+      >
         {queryText}
       </div>
-      
+
       <!-- Compact results display -->
       <div class="space-y-2 mt-2">
         <!-- Values section -->
@@ -64,18 +77,29 @@
             <!-- Unique IDs -->
             {#if result.values.num_unique_ids !== undefined}
               <div class="flex items-center justify-between text-xs">
-                <span class="text-gray-600 dark:text-gray-400">Unique IDs:</span>
+                <span class="text-gray-600 dark:text-gray-400">Unique IDs:</span
+                >
                 <span class="font-mono text-gray-700 dark:text-gray-300">
-                  {formatNumber(result.values.num_unique_ids)} / {formatNumber(idsLength)}
+                  {formatNumber(result.values.num_unique_ids)} / {formatNumber(
+                    idsLength
+                  )}
                 </span>
               </div>
               <SliceMetricBar
-                value={idsLength > 0 ? result.values.num_unique_ids / idsLength : 0}
+                value={idsLength > 0
+                  ? result.values.num_unique_ids / idsLength
+                  : 0}
                 width={null}
                 showFullBar
               >
                 <span slot="caption" class="text-xs">
-                  <strong>{idsLength > 0 ? d3.format('.1%')(result.values.num_unique_ids / idsLength) : '0.0%'}</strong>
+                  <strong
+                    >{idsLength > 0
+                      ? d3.format('.1%')(
+                          result.values.num_unique_ids / idsLength
+                        )
+                      : '0.0%'}</strong
+                  >
                 </span>
               </SliceMetricBar>
             {/if}
@@ -111,7 +135,9 @@
                     showFullBar
                   >
                     <span slot="caption" class="text-xs">
-                      <strong>{d3.format('.1%')(result.values.mean ?? 0)}</strong> true
+                      <strong
+                        >{d3.format('.1%')(result.values.mean ?? 0)}</strong
+                      > true
                     </span>
                   </SliceMetricBar>
                 {:else if result.values.type === 'continuous' && result.values.hist}
@@ -123,7 +149,9 @@
                 {:else if result.values.type === 'categorical' && result.values.counts}
                   <SliceMetricCategoryBar
                     order={Object.keys(result.values.counts).sort(
-                      (a, b) => (result.values.counts[b] ?? 0) - (result.values.counts[a] ?? 0)
+                      (a, b) =>
+                        (result.values.counts[b] ?? 0) -
+                        (result.values.counts[a] ?? 0)
                     )}
                     counts={result.values.counts}
                     width={null}
@@ -137,7 +165,9 @@
         <!-- Occurrences section -->
         {#if result?.occurrences}
           <div class="mt-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-            <div class="text-xs text-gray-600 dark:text-gray-400 mb-2">Occurrences:</div>
+            <div class="text-xs text-gray-600 dark:text-gray-400 mb-2">
+              Occurrences:
+            </div>
             <div class="space-y-2">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-gray-600 dark:text-gray-400">Count:</span>
@@ -159,7 +189,9 @@
         <!-- Durations section -->
         {#if result?.durations}
           <div class="mt-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-            <div class="text-xs text-gray-600 dark:text-gray-400 mb-2">Durations:</div>
+            <div class="text-xs text-gray-600 dark:text-gray-400 mb-2">
+              Durations:
+            </div>
             <div class="space-y-2">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-gray-600 dark:text-gray-400">Count:</span>
@@ -182,4 +214,4 @@
       </div>
     </div>
   {/if}
-</div> 
+</div>

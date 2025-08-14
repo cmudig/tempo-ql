@@ -17,22 +17,33 @@
   $: {
     console.log('🔍 SubquerySection - subqueries changed:', subqueries);
     console.log('🔍 SubquerySection - enabled:', enabled);
-    console.log('🔍 SubquerySection - subqueries keys:', Object.keys(subqueries));
+    console.log(
+      '🔍 SubquerySection - subqueries keys:',
+      Object.keys(subqueries)
+    );
   }
 </script>
 
-<div class="bg-white dark:bg-gray-900 p-4 mb-0 border-0 rounded-none {width} transition-colors duration-200">
+<div
+  class="bg-white dark:bg-gray-900 p-4 mb-0 border-0 rounded-none {width} transition-colors duration-200"
+>
   <!-- Header with toggle button -->
   <div class="flex items-center justify-between mb-2">
-    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Subquery</h3>
+    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+      Subquery
+    </h3>
     <button
       on:click={toggleSection}
-      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 {enabled ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-700'}"
+      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 {enabled
+        ? 'bg-blue-600'
+        : 'bg-gray-200 dark:bg-gray-700'}"
       role="switch"
       aria-checked={enabled}
     >
       <span
-        class="inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200 {enabled ? 'translate-x-6' : 'translate-x-1'}"
+        class="inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200 {enabled
+          ? 'translate-x-6'
+          : 'translate-x-1'}"
       />
     </button>
   </div>
@@ -45,11 +56,7 @@
           Found {Object.keys(subqueries).length} subqueries
         </div>
         {#each Object.entries(subqueries) as [queryText, subqueryData]}
-          <SubqueryItem
-            {queryText}
-            result={subqueryData.result}
-            {idsLength}
-          />
+          <SubqueryItem {queryText} result={subqueryData.result} {idsLength} />
         {/each}
       {:else}
         <div class="text-center py-4 text-gray-500 dark:text-gray-400">
@@ -60,4 +67,4 @@
       {/if}
     </div>
   {/if}
-</div> 
+</div>

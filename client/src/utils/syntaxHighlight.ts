@@ -29,12 +29,15 @@ export const highlightPatterns = [
 // Simple syntax highlighter function
 export function highlightSyntax(text: string): string {
   let highlightedText = text;
-  
+
   // Replace special tokens for highlighting
-  highlightedText = highlightedText.replaceAll(/<([A-z]+?)>/g, '####TOKEN####$1####ENDTOKEN####');
-  
+  highlightedText = highlightedText.replaceAll(
+    /<([A-z]+?)>/g,
+    '####TOKEN####$1####ENDTOKEN####'
+  );
+
   // Apply highlighting patterns
-  highlightPatterns.forEach(pattern => {
+  highlightPatterns.forEach((pattern) => {
     if (pattern.name === 'tempo-placeholder-token') {
       highlightedText = highlightedText.replace(
         /####TOKEN####([A-z]+)####ENDTOKEN####/g,
@@ -67,13 +70,13 @@ export function highlightSyntax(text: string): string {
       );
     }
   });
-  
+
   // Escape HTML characters
   highlightedText = highlightedText
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-  
+
   return highlightedText;
 }
 
@@ -81,4 +84,4 @@ export function formatQueryForHighlights(query: string): string {
   // replace <word> with a token
   query = query.replaceAll(/<([A-z]+?)>/g, '####TOKEN####$1####ENDTOKEN####');
   return query.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-} 
+}
