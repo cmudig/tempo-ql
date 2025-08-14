@@ -1,11 +1,11 @@
 import pathlib
 import anywidget
 import traitlets
+import datetime
 from typing import Optional, Tuple, Any
 
 from .evaluator import QueryEngine
 from .ai_assistant import AIAssistant
-from .scope_analyzer import ScopeAnalyzer
 from .utils import make_query_result_summary
 
 
@@ -115,10 +115,6 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.llm_available = self.ai_assistant.is_enabled
         self.api_status = self.ai_assistant.get_status()
         
-        # Initialize Scope Analyzer
-        if query_engine:
-            self.scope_analyzer = ScopeAnalyzer(query_engine=query_engine)
-
     def _init_data_state(self):
         """Initialize data-dependent state if query engine is available."""
         if not self.query_engine:
@@ -139,7 +135,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             )
             
             # Initialize scopes
-            self.scopes = self.scope_analyzer.get_scopes() if hasattr(self, 'scope_analyzer') else []
+            self.scopes = self.query_engine.dataset.get_scopes()
             
             # Initialize default values structure
             self._set_default_values()
@@ -280,25 +276,18 @@ class TempoQLWidget(anywidget.AnyWidget):
     
     def analyze_scope(self, scope_name: str, force_refresh: bool = False):
         """Analyze a data scope using the ScopeAnalyzer."""
-        if not hasattr(self, 'scope_analyzer'):
-            print("❌ ScopeAnalyzer not initialized")
-            return None
-            
-        def progress_callback(message: str):
-            # Add more descriptive prefixes to progress messages
-            if "analyzing" in message.lower():
-                formatted_message = f"Analyzing {scope_name}: {message}"
-            elif "processing" in message.lower():
-                formatted_message = f"Processing {scope_name}: {message}"
-            else:
-                formatted_message = f"{scope_name}: {message}"
-            self._set_loading(True, formatted_message)
-        
-        return self.scope_analyzer.analyze_scope(
-            scope_name, 
-            force_refresh=force_refresh, 
-            progress_callback=progress_callback
-        )
+        self._set_loading(True, "Loading scopes...")
+        concepts = self.query_engine.dataset.list_names(scope=scope_name, return_counts=True)
+        result = {
+            'scope_name': scope_name,
+            'concept_count': len(concepts),
+            'concepts': concepts.to_dict(orient='records'),
+            'analyzed_at': str(datetime.datetime.now()),
+            'cache_version': '4.0',
+            'total_records': concepts['count'].sum()
+        }
+        self._set_loading(False)
+        return result
 
     # ==== AI ASSISTANT METHODS ====
     

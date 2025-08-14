@@ -152,6 +152,10 @@ class GenericDataset:
             for table in self.tables
         ])
         
+    def get_scopes(self):
+        return sorted(set([table_info['scope'] for table_info in self.tables
+                      if 'scope' in table_info]))
+        
     def __del__(self):
         if self.connection is not None: self.connection.close()
         
@@ -906,7 +910,7 @@ class GenericDataset:
                     for id_val in trajectory_id_list[start_idx:start_idx + batch_size]
                 ]))
             
-    def list_names(self, scope=None, return_counts=False):
+    def list_names(self, scope=None, return_counts=False, cache_only=False):
         """
         Retrieve a dataframe containing the applicable names for attributes, events 
         or intervals within the given scope (or if None, then all scopes). If True, 
@@ -923,6 +927,8 @@ class GenericDataset:
             if cache_key in self._name_list_cache:
                 type_names += self._name_list_cache[cache_key]
                 continue
+            
+            if cache_only: continue
                 
             table = self._get_table(table_info)
             if self.verbose:
