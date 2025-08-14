@@ -1,8 +1,6 @@
 import os
 import re
 from typing import Optional, Dict, Any, List, Tuple
-from google import genai
-from google.genai import types
 import json
 from tempo_ql.generic.dataset import ConceptFilter
 
@@ -53,6 +51,8 @@ class AIAssistant:
         
         # Initialize the Gemini client if we have a valid API key
         if self.api_key and self._is_valid_api_key(self.api_key):
+            from google import genai
+            from google.genai import types
             try:
                 self.genai_client = genai.Client(api_key=self.api_key)
                 tools = types.Tool(function_declarations=[search_concepts_function])
@@ -386,6 +386,7 @@ Please format your response with:
             raise Exception("AI Assistant is not available. Please check your API key configuration.")
         
         num_calls = 0
+        from google.genai import types
         contents = [
             types.Content(
                 role="user", parts=[types.Part(text=prompt)]
@@ -420,6 +421,7 @@ Please format your response with:
                             if len(matching_names) >= 100:
                                 function_response = "More than 100 concepts matched the query. The results are truncated.\n" + function_response
                         print("Responding to function call:", function_response)
+                        from google.genai import types
                         function_response = types.Part.from_function_response(
                             name=function_call.name,
                             response={"result": function_response},
