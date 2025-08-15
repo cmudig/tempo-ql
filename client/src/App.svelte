@@ -10,7 +10,6 @@
   import ThemeToggle from './components/ThemeToggle.svelte';
   import LoadingBar from './components/LoadingBar.svelte';
   import HistoryDropdown from './components/HistoryDropdown.svelte';
-  import QueryHistoryDropdown from './components/QueryHistoryDropdown.svelte';
 
   export let model;
 
@@ -19,53 +18,36 @@
 
   // Destructure stores and functions for cleaner usage
   const {
-    message,
     values,
-    idsLength,
     listNames,
-    handleTextInput,
+    runQuery,
     handleLLMQuestion,
-    subqueryEnabled,
     subqueries,
+    queryError,
     scopes,
-    selectedScope,
     scopeConcepts,
     handleScopeAnalysis,
-    llmMessage,
+    llmResponse,
     llmLoading,
     llmError,
-    llmEnabled,
+    llmAvailable,
+    llmExplanation,
     apiStatus,
     isLoading,
     loadingMessage,
     extractedQuery,
-    aiExplanation,
     hasExtractedQuery,
     handleQueryExtraction,
-    textInputStore,
+    textInput,
   } = backend;
 
-  // Local state for text input - reactive to backend changes
-  let textInput = '';
-
-  // Sync local textInput with backend store - this handles AI query extraction
-  $: {
-    if ($textInputStore && $textInputStore !== textInput) {
-      console.log(
-        '🔄 Frontend: Syncing text input from backend:',
-        $textInputStore
-      );
-      console.log('🔄 Frontend: Previous textInput:', textInput);
-      textInput = $textInputStore;
-      console.log('🔄 Frontend: Updated textInput:', textInput);
-    }
-  }
+  let selectedScope: string = '';
 
   // Get data fields from backend list_names (now a simple list)
   $: dataFields = $listNames || [];
 
   // Tab state
-  let activeTab = 'data-elements';
+  let activeTab = 'query-inspector';
 
   // AI History Cache - stores up to 10 recent conversations
   let aiHistory: Array<{
@@ -143,8 +125,8 @@
 
   // Watch for AI responses and add them to history
   $: if (
-    $llmMessage &&
-    $llmMessage.trim() &&
+    $llmResponse &&
+    $llmResponse.trim() &&
     !$llmLoading &&
     currentQuestion &&
     !historicalResponse
@@ -152,7 +134,7 @@
     // Add the question-response pair to history
     // Extract query from the response if available
     const extractedQuery = $extractedQuery || null;
-    addToHistory(currentQuestion, $llmMessage, extractedQuery);
+    addToHistory(currentQuestion, $llmResponse, extractedQuery);
     currentQuestion = ''; // Reset current question
   }
 
@@ -163,20 +145,17 @@
 
   // Handle run button click
   function handleRun() {
-    if (textInput.trim()) {
-      model.set('process_trigger', 'run');
-      model.save_changes();
+    console.log('text input', $textInput);
+    if ($textInput.trim()) {
+      runQuery($textInput);
     }
   }
 
   function handleExplain() {
-    if (textInput.trim()) {
-      console.log('🔍 Explain button clicked for query:', textInput);
+    if ($textInput.trim()) {
+      console.log('🔍 Explain button clicked for query:', $textInput);
       // Use the AI assistant in explain mode to explain the current query
-      handleLLMQuestion(
-        `Please explain this TempoQL query: ${textInput}`,
-        'explain'
-      );
+      handleLLMQuestion($textInput, 'explain');
     }
   }
 
@@ -208,11 +187,6 @@
   function handleHistoryClick() {
     console.log('📚 History button clicked');
 
-    if (!showHistoryDropdown) {
-      // Calculate position when opening dropdown
-      calculateHistoryDropdownPosition();
-    }
-
     showHistoryDropdown = !showHistoryDropdown;
   }
 
@@ -220,180 +194,7 @@
   function handleQueryHistoryClick() {
     console.log('📚 Query History button clicked');
 
-    if (!showQueryHistoryDropdown) {
-      // Calculate position when opening dropdown
-      calculateQueryHistoryDropdownPosition();
-    }
-
     showQueryHistoryDropdown = !showQueryHistoryDropdown;
-  }
-
-  // Calculate position for history dropdown
-  function calculateHistoryDropdownPosition() {
-    // Find all history buttons and log them
-    const allHistoryButtons = document.querySelectorAll('.history-button');
-    console.log('🔍 Found history buttons:', allHistoryButtons.length);
-
-    // Find the history button directly
-    const historyButton = document.querySelector('.history-button');
-    console.log('🔍 Looking for history button:', historyButton);
-
-    if (historyButton) {
-      // Temporarily highlight the button we found for debugging
-      (historyButton as HTMLElement).style.border = '2px solid red';
-      (historyButton as HTMLElement).style.backgroundColor =
-        'rgba(255, 0, 0, 0.2)';
-      setTimeout(() => {
-        (historyButton as HTMLElement).style.border = '';
-        (historyButton as HTMLElement).style.backgroundColor = '';
-      }, 2000);
-
-      const buttonRect = historyButton.getBoundingClientRect();
-      console.log('📍 Button position:', {
-        top: buttonRect.top,
-        bottom: buttonRect.bottom,
-        left: buttonRect.left,
-        right: buttonRect.right,
-        width: buttonRect.width,
-        height: buttonRect.height,
-      });
-
-      // Log the button's parent elements to see where it is
-      let parent = historyButton.parentElement;
-      let parentPath = [];
-      while (parent && parentPath.length < 5) {
-        parentPath.push(
-          parent.tagName +
-            (parent.className ? '.' + parent.className.split(' ')[0] : '')
-        );
-        parent = parent.parentElement;
-      }
-      console.log('📍 Button parent path:', parentPath.reverse().join(' > '));
-
-      const dropdownWidth = 320; // Width of the dropdown
-
-      // Position dropdown at the same level as the history button
-      historyDropdownPosition = {
-        top: buttonRect.top - 10, // Slightly above the button
-        left: buttonRect.right - dropdownWidth, // Align right edge with button
-      };
-
-      console.log('📍 Calculated dropdown position:', historyDropdownPosition);
-
-      // Ensure dropdown doesn't go off-screen to the left
-      if (historyDropdownPosition.left < 10) {
-        historyDropdownPosition.left = 10;
-      }
-
-      // Ensure dropdown doesn't go off-screen to the right
-      if (
-        historyDropdownPosition.left + dropdownWidth >
-        window.innerWidth - 10
-      ) {
-        historyDropdownPosition.left = window.innerWidth - dropdownWidth - 10;
-      }
-
-      // Ensure dropdown doesn't go below viewport (only if it would be completely off-screen)
-      const maxTop = window.innerHeight - 50; // Leave minimal space at bottom
-      if (historyDropdownPosition.top > maxTop) {
-        historyDropdownPosition.top = maxTop;
-      }
-
-      console.log('📍 Final dropdown position:', historyDropdownPosition);
-      console.log('📍 Viewport height:', window.innerHeight);
-      console.log('📍 Max top allowed:', maxTop);
-    } else {
-      console.log('❌ History button not found!');
-    }
-  }
-
-  // Calculate position for query history dropdown
-  function calculateQueryHistoryDropdownPosition() {
-    // Find the query history button directly
-    const queryHistoryButton = document.querySelector('.query-history-button');
-    console.log('🔍 Looking for query history button:', queryHistoryButton);
-
-    if (queryHistoryButton) {
-      const buttonRect = queryHistoryButton.getBoundingClientRect();
-      console.log('📍 Query button position:', {
-        top: buttonRect.top,
-        bottom: buttonRect.bottom,
-        left: buttonRect.left,
-        right: buttonRect.right,
-      });
-
-      const dropdownWidth = 320; // Width of the dropdown
-
-      // Position dropdown right below the query history button
-      queryHistoryDropdownPosition = {
-        top: buttonRect.bottom + 5, // 5px below the button
-        left: buttonRect.right - dropdownWidth, // Align right edge with button
-      };
-
-      console.log(
-        '📍 Calculated query dropdown position:',
-        queryHistoryDropdownPosition
-      );
-
-      // Ensure dropdown doesn't go off-screen to the left
-      if (queryHistoryDropdownPosition.left < 10) {
-        queryHistoryDropdownPosition.left = 10;
-      }
-
-      // Ensure dropdown doesn't go off-screen to the right
-      if (
-        queryHistoryDropdownPosition.left + dropdownWidth >
-        window.innerWidth - 10
-      ) {
-        queryHistoryDropdownPosition.left =
-          window.innerWidth - dropdownWidth - 10;
-      }
-
-      // Ensure dropdown doesn't go below viewport (only if it would be completely off-screen)
-      const maxTop = window.innerHeight - 50; // Leave minimal space at bottom
-      if (queryHistoryDropdownPosition.top > maxTop) {
-        queryHistoryDropdownPosition.top = maxTop;
-      }
-
-      console.log(
-        '📍 Final query dropdown position:',
-        queryHistoryDropdownPosition
-      );
-    } else {
-      console.log('❌ Query history button not found!');
-    }
-  }
-
-  // Handle window resize to recalculate dropdown position
-  function handleWindowResize() {
-    if (showHistoryDropdown) {
-      calculateHistoryDropdownPosition();
-    }
-    if (showQueryHistoryDropdown) {
-      calculateQueryHistoryDropdownPosition();
-    }
-  }
-
-  // Handle scroll to recalculate dropdown position
-  function handleScroll() {
-    if (showHistoryDropdown) {
-      // Use requestAnimationFrame for smooth updates
-      requestAnimationFrame(() => {
-        calculateHistoryDropdownPosition();
-      });
-    }
-    if (showQueryHistoryDropdown) {
-      // Use requestAnimationFrame for smooth updates
-      requestAnimationFrame(() => {
-        calculateQueryHistoryDropdownPosition();
-      });
-    }
-  }
-
-  // Add window event listeners
-  if (typeof window !== 'undefined') {
-    window.addEventListener('resize', handleWindowResize);
-    window.addEventListener('scroll', handleScroll);
   }
 
   // Handle selecting a history item
@@ -411,7 +212,7 @@
     // Populate text input with query and AI assistant with question if available
     if (historyItem.query) {
       // Set the extracted query in the main text input box and sync with backend
-      textInput = historyItem.query;
+      $textInput = historyItem.query;
       model.set('text_input', historyItem.query);
       model.save_changes();
     }
@@ -447,7 +248,7 @@
     // Populate text input with query and AI assistant with question if available
     if (historyItem.query) {
       // Set the extracted query in the main text input box and sync with backend
-      textInput = historyItem.query;
+      $textInput = historyItem.query;
       model.set('text_input', historyItem.query);
       model.save_changes();
     }
@@ -492,45 +293,34 @@
       <DataElementsTab
         width="w-full"
         scopes={$scopes}
-        selectedScope={$selectedScope}
+        bind:selectedScope
         scopeConcepts={$scopeConcepts}
         isLoading={$isLoading}
         loadingMessage={$loadingMessage}
         onScopeSelect={(scope) => {
-          model.set('selected_scope', scope);
-          model.save_changes();
+          handleScopeAnalysis(scope, false);
         }}
         onAnalyzeScope={(scope) => {
-          handleScopeAnalysis(scope);
+          handleScopeAnalysis(scope, true);
         }}
       />
     {:else if activeTab === 'query-inspector'}
       <QueryInspectorTab
-        {textInput}
-        onTextInput={(value) => {
-          textInput = value;
-          handleTextInput(value);
-        }}
+        bind:textInput={$textInput}
         {dataFields}
         onRun={handleRun}
         onExplain={handleExplain}
-        message={$message}
+        queryError={$queryError}
         values={$values}
-        idsLength={$idsLength}
-        subqueryEnabled={$subqueryEnabled}
         subqueries={$subqueries}
-        onSubqueryToggle={(enabled) => {
-          model.set('subquery_enabled', enabled);
-          model.save_changes();
-        }}
         onLLMSubmit={handleLLMQuestionSubmit}
-        llmMessage={$llmMessage}
+        llmResponse={$llmResponse}
         llmLoading={$llmLoading}
         llmError={$llmError}
-        llmEnabled={$llmEnabled}
+        llmAvailable={$llmAvailable}
         apiStatus={$apiStatus}
         extractedQuery={$extractedQuery}
-        aiExplanation={$aiExplanation}
+        llmExplanation={$llmExplanation}
         hasExtractedQuery={$hasExtractedQuery}
         onQueryExtracted={handleQueryExtraction}
         onHistoryClick={handleHistoryClick}
@@ -553,7 +343,7 @@
   />
 
   <!-- Query History Dropdown Component -->
-  <QueryHistoryDropdown
+  <HistoryDropdown
     isVisible={showQueryHistoryDropdown}
     history={aiHistory}
     onClose={handleQueryHistoryClose}

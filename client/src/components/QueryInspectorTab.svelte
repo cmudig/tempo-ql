@@ -1,7 +1,6 @@
 <script lang="ts">
   import TextInputCard from './TextInputCard.svelte';
   import QueryResultCard from './QueryResultCard.svelte';
-  import SQLDisplay from './SQLDisplay.svelte';
   import SubquerySection from './SubquerySection.svelte';
   import AIAssistantSection from './AIAssistantSection.svelte';
 
@@ -10,23 +9,20 @@
   export let dataFields: string[] = [];
   export let onRun: () => void = () => {};
   export let onExplain: () => void = () => {};
-  export let message: string = '';
+  export let queryError: string = '';
   export let values: any = {};
-  export let idsLength: number = 0;
-  export let subqueryEnabled: boolean = false;
   export let subqueries: any = {};
-  export let onSubqueryToggle: (enabled: boolean) => void = () => {};
   export let width: string = 'w-full';
 
   // AI Assistant props
   export let onLLMSubmit: (question: string) => void = () => {};
-  export let llmMessage: string = '';
+  export let llmResponse: string = '';
   export let llmLoading: boolean = false;
   export let llmError: string = '';
-  export let llmEnabled: boolean = false;
+  export let llmAvailable: boolean = false;
   export let apiStatus: string = '';
   export let extractedQuery: string = '';
-  export let aiExplanation: string = '';
+  export let llmExplanation: string = '';
   export let hasExtractedQuery: boolean = false;
   export let onQueryExtracted: () => void = () => {};
 
@@ -43,8 +39,7 @@
     <!-- Text Input Card -->
     <div class="flex-auto">
       <TextInputCard
-        value={textInput}
-        onInput={onTextInput}
+        bind:value={textInput}
         {dataFields}
         {onRun}
         {onExplain}
@@ -53,19 +48,18 @@
       />
     </div>
 
-    {#if llmEnabled}
+    {#if llmAvailable}
       <!-- AI Assistant Section with scrollable area -->
       <div class="w-full h-1/2 overflow-hidden" bind:this={aiAssistantRef}>
         <AIAssistantSection
           onSubmit={onLLMSubmit}
-          message={llmMessage}
+          {llmResponse}
           isLoading={llmLoading}
           error={llmError}
           {apiStatus}
           width="w-full"
           scrollable={true}
           {extractedQuery}
-          {aiExplanation}
           {hasExtractedQuery}
           {onQueryExtracted}
           {onHistoryClick}
@@ -80,28 +74,37 @@
   <div
     class="flex-auto p-4 border-l border-slate-400 dark:border-slate-600 h-full overflow-auto"
   >
-    <div class="space-y-2">
-      <QueryResultCard {values} {idsLength} width="w-full" scrollable={false} />
+    {#if !!queryError}
       <div
-        class="flex-shrink-0 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3"
+        class="bg-red-50 dark:bg-red-800/40 rounded-lg border border-red-200 dark:border-red-400 p-4 mb-4"
       >
-        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Query Output
+        <h3 class="text-lg font-medium text-red-700 dark:text-red-100 mb-2">
+          Query Error
         </h3>
-        <div
-          class="text-xs font-mono text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-900 rounded border p-2 max-h-20 overflow-y-auto"
-        >
-          {message || 'No query executed yet...'}
+        <div class="text-sm font-mono text-slate-800 dark:text-slate-100">
+          {queryError}
         </div>
       </div>
-
-      <SubquerySection
-        width="w-full"
-        enabled={subqueryEnabled}
-        {subqueries}
-        {idsLength}
-        onToggle={onSubqueryToggle}
-      />
+    {/if}
+    <div
+      class="px-2 mb-4 border-0 rounded-none {width} transition-colors duration-200 w-full"
+      class:opacity-50={!values || Object.keys(values).length == 0}
+    >
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          Query Result
+        </h3>
+      </div>
+      {#if !!values && Object.keys(values).length > 0}
+        <QueryResultCard {values} />
+      {:else}
+        <!-- Empty state -->
+        <div class="text-center py-8 text-slate-900 dark:text-slate-100">
+          No query results
+        </div>
+      {/if}
     </div>
+
+    <SubquerySection width="w-full" {subqueries} />
   </div>
 </div>

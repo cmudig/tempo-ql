@@ -52,40 +52,18 @@ def compute_histogram(values):
         except Exception:
             return {} 
 
-def make_series_summary(values,ids = None, value_type=None):
+def make_series_summary(values, value_type=None):
 
     summary = {}
     if len(values) == 0: return summary
     summary["length"] = len(values)
     summary["num_unique_values"] = values.nunique()
-    if ids is not None:
-        summary["num_unique_ids"] = ids.nunique()
-        summary["ids_hist"] = compute_histogram(ids.value_counts())
-        summary["ids_hist_mean"] = np.mean(ids.value_counts())
     
     if pd.isna(values).sum() > 0:
         summary["missingness"] = pd.isna(values).mean()
         summary["num_missing_values"] = pd.isna(values).sum()
-        # Store missing IDs before filtering values
-        if ids is not None:
-            mask = values.isna()
-            missing_ids = ids[mask]
-            if len(missing_ids) > 0:
-                missing_counts = missing_ids.value_counts()
-                summary["missing_ids_hist"] = compute_histogram(missing_counts)
-                summary["missing_ids_hist_mean"] = np.mean(missing_counts)
-            else:
-                summary["missing_ids_hist"] = {}
-                summary["missing_ids_hist_mean"] = 0
-        # Filter out missing values for further processing
         values = values[~pd.isna(values)]
-    else:
-        summary["missingness"] = 0
-        summary["num_missing_values"] = 0
-        if ids is not None:
-            summary["missing_ids_hist"] = {}
-            summary["missing_ids_hist_mean"] = 0
-    
+        
     if value_type is None:
         num_unique = len(np.unique(values))
         try:
@@ -116,25 +94,46 @@ def make_series_summary(values,ids = None, value_type=None):
         summary["hist"] = compute_histogram(values)
     return summary
 
-def make_query_result_summary(query_result):
+def make_query_result_summary(query_result, all_ids):
     """
     Supports describing Attributes, Events, Intervals, TimeSeries, and TimeSeriesSet.
     """
     base = {}
     if hasattr(query_result, "name"): base["name"] = query_result.name
+    base["type"] = type(query_result).__name__
     
     ids = None
     if hasattr(query_result, "get_ids"):
         ids = pd.Series(query_result.get_ids(), name='id')
-    if isinstance(query_result, (Events, Intervals)):
-        ids = pd.Series(query_result.get_ids(), name='id')
-        sizes = query_result.get_values().groupby(query_result.get_ids()).size().rename("size")
-        base["occurrences"] = make_series_summary(pd.merge(ids, sizes, left_on='id', right_index=True, how='left')["size"].fillna(0), value_type="continuous")
+        base["ids"] = {
+            "count": {
+                "type": "count",
+                "count": ids.nunique(),
+                "total": len(np.unique(all_ids))
+            },
+            "count_per_trajectory": make_series_summary(ids.value_counts(), value_type='continuous')
+        }
+        
+    if hasattr(query_result, "get_types"):
+        types = query_result.get_types()
+        base["types"] = make_series_summary(types, value_type='categorical')
+        
     if isinstance(query_result, Intervals):
         base["durations"] = make_series_summary(query_result.get_end_times() - query_result.get_start_times(), value_type="continuous")
     
     if hasattr(query_result, "get_values") and (~pd.isna(query_result.get_values())).sum() > 0:
-        base["values"] = make_series_summary(query_result.get_values(),ids)
+        vals = query_result.get_values()
+        base["missingness"] = {
+            "rate": {
+                "type": "count",
+                "count": pd.isna(vals).sum(),
+                "total": len(vals)
+            },
+            **({"rate_per_trajectory": make_series_summary(pd.isna(vals).groupby(ids).agg('mean'), value_type='continuous')}
+               if ids is not None else {})
+        }
+        
+        base["values"] = make_series_summary(vals)
         
     return base
 

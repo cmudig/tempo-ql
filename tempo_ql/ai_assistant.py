@@ -96,7 +96,7 @@ class AIAssistant:
         elif not self.is_enabled:
             return "API key provided but client initialization failed"
         else:
-            return f"Configured: {self.api_key[:10]}..."
+            return f"Configured"
     
     def is_available(self) -> bool:
         """

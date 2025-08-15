@@ -133,11 +133,6 @@
         textarea.value = previousValue;
         textarea.focus();
       }
-
-      // Clear other data if input is empty
-      if (!previousValue.trim()) {
-        clearOtherData();
-      }
     }
   }
 
@@ -157,18 +152,7 @@
         textarea.value = nextValue;
         textarea.focus();
       }
-
-      // Clear other data if input is empty
-      if (!nextValue.trim()) {
-        clearOtherData();
-      }
     }
-  }
-
-  function clearOtherData() {
-    console.log('🧹 Clearing other data due to empty input');
-    // This will be handled by the backend when it receives an empty text_input
-    // The backend should clear message, values, and other related data
   }
 
   function handleInput(event: Event) {
@@ -180,6 +164,7 @@
     // Add to undo history
     addToHistory(newValue);
 
+    value = newValue;
     onInput(newValue);
 
     // Update cursor position
@@ -188,11 +173,6 @@
 
     // Get autocomplete options
     updateAutocompleteOptions(newValue, cursorPosition);
-
-    // Clear other data if input is empty
-    if (!newValue.trim()) {
-      clearOtherData();
-    }
   }
 
   function updateAutocompleteOptions(text: string, position: number) {
@@ -395,13 +375,19 @@
   }
 </script>
 
-<div class="p-4 {width} flex flex-col h-full">
+<div class="flex flex-col w-full h-full p-4 mb-2">
+  <div class="flex items-center mb-4 gap-2 shrink-0">
+    <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 pr-2">
+      TempoQL Query
+    </h3>
+  </div>
+
   <!-- Text Input Section -->
-  <div class="mb-2 relative flex-auto">
+  <div class="relative flex-auto min-h-0">
     <textarea
       id="text-input"
       bind:this={textarea}
-      class="w-full h-full p-6 pr-32 bg-transparent font-mono text-sm bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+      class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
       placeholder="// Write your Tempo-QL query here... (Ctrl+Z to undo, Ctrl+Y to redo)"
       bind:value
       on:input={handleInput}
@@ -412,19 +398,10 @@
 
     <!-- Syntax Highlighting Overlay -->
     <div
-      class="absolute top-0 left-0 w-full h-full p-6 pr-32 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words"
+      class="absolute top-0 left-0 w-full h-full p-4 pb-16 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words"
       id={highlightedViewID}
       bind:this={highlightedView}
     ></div>
-
-    <!-- History Button in top-right corner -->
-    <button
-      on:click={onHistoryClick}
-      class="absolute top-2 right-2 px-3 py-2 z-30 rounded-md bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white transition-colors duration-200"
-      title="View query history"
-    >
-      <Fa icon={faClock} />
-    </button>
 
     <!-- Autocomplete Dropdown -->
     {#if showAutocomplete && autocompleteOptions.length > 0}
@@ -461,10 +438,12 @@
         {/each}
       </div>
     {/if}
-  </div>
-  <div class="shrink-0 w-full flex justify-end items-center gap-2 my-2">
-    <!-- Explain Button -->
-    <button
+
+    <div
+      class="absolute right-0 bottom-0 mr-4 mb-4 flex justify-end items-center gap-2 z-50"
+    >
+      <!-- Explain Button -->
+      <!-- <button
       class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600"
       on:click={onExplain}
       disabled={!value.trim()}
@@ -472,19 +451,28 @@
       class:cursor-not-allowed={!value.trim()}
     >
       Explain
-    </button>
+    </button> -->
+      <button
+        on:click={onHistoryClick}
+        class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white"
+        title="View query history"
+      >
+        <Fa icon={faClock} class="inline mr-2" />
+        History
+      </button>
 
-    <!-- Run Button -->
-    <button
-      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white"
-      on:click={onRun}
-      disabled={!value.trim()}
-      class:opacity-50={!value.trim()}
-      class:cursor-not-allowed={!value.trim()}
-    >
-      <Fa icon={faPlay} class="inline mr-2" />
-      Run
-    </button>
+      <!-- Run Button -->
+      <button
+        class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white"
+        on:click={onRun}
+        disabled={!value.trim()}
+        class:opacity-50={!value.trim()}
+        class:cursor-not-allowed={!value.trim()}
+      >
+        <Fa icon={faPlay} class="inline mr-2" />
+        Run Query
+      </button>
+    </div>
   </div>
 </div>
 

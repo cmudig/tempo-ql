@@ -1,14 +1,21 @@
 <script lang="ts">
+  import {
+    faBoltLightning,
+    faCheckCircle,
+    faClock,
+    faWarning,
+    faXmarkCircle,
+  } from '@fortawesome/free-solid-svg-icons';
   import { theme } from '../stores/theme';
+  import Fa from 'svelte-fa';
   export let onSubmit: (value: string) => void = () => {};
-  export let message: string = '';
   export let isLoading: boolean = false;
   export let error: string = '';
+  export let llmResponse: string = '';
   export let apiStatus: string = 'Checking API connection...';
   export let width: string = 'w-full';
-  export let scrollable: boolean = false;
+  export let scrollable: boolean = true;
   export let extractedQuery: string = '';
-  export let aiExplanation: string = '';
   export let hasExtractedQuery: boolean = false;
 
   export let onQueryExtracted: () => void = () => {};
@@ -16,15 +23,14 @@
   export let inputValueOverride: string = '';
   export let historicalResponse: string = '';
 
+  let tab: 'query' | 'response' = 'query';
+
   let inputValue = '';
   let inputElement: HTMLTextAreaElement;
 
   // Handle external input value override (for history selection)
   $: if (inputValueOverride && inputValueOverride !== inputValue) {
     inputValue = inputValueOverride;
-    if (inputElement) {
-      autoResize(inputElement);
-    }
   }
 
   function handleSubmit() {
@@ -33,7 +39,6 @@
       // Keep the question in the input box instead of clearing it
       if (inputElement) {
         inputElement.focus();
-        autoResize(inputElement);
       }
     }
   }
@@ -43,16 +48,6 @@
       event.preventDefault();
       handleSubmit();
     }
-  }
-
-  function autoResize(element: HTMLTextAreaElement) {
-    element.style.height = 'auto';
-    element.style.height = Math.min(element.scrollHeight, 200) + 'px';
-  }
-
-  function handleInput(event: Event) {
-    const target = event.target as HTMLTextAreaElement;
-    autoResize(target);
   }
 
   // Function to format markdown-like text
@@ -68,7 +63,7 @@
         // Convert `code` to HTML
         .replace(
           /`(.*?)`/g,
-          '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono">$1</code>'
+          '<code class="bg-slate-100 px-1 py-0.5 rounded text-sm font-mono">$1</code>'
         )
         // Convert line breaks to HTML
         .replace(/\n/g, '<br>')
@@ -91,7 +86,7 @@
         color: 'text-green-600',
         bgColor: 'bg-green-50',
         borderColor: 'border-green-200',
-        icon: '✅',
+        icon: faCheckCircle,
       };
     } else if (
       status.includes('Not configured') ||
@@ -101,14 +96,14 @@
         color: 'text-red-600',
         bgColor: 'bg-red-50',
         borderColor: 'border-red-200',
-        icon: '❌',
+        icon: faXmarkCircle,
       };
     } else {
       return {
         color: 'text-yellow-600',
         bgColor: 'bg-yellow-50',
         borderColor: 'border-yellow-200',
-        icon: '⚠️',
+        icon: faWarning,
       };
     }
   }
@@ -116,131 +111,109 @@
   $: apiStatusInfo = getApiStatusInfo(apiStatus);
 </script>
 
-<div
-  class="bg-white dark:bg-gray-900 p-4 border-0 rounded-none {width} transition-colors duration-200 {scrollable
-    ? 'h-full flex flex-col'
-    : ''}"
->
+<div class="px-4 pb-4 {width} h-full flex flex-col">
   <!-- Header with API Status -->
-  <div class="flex items-center justify-between mb-4">
-    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+  <div class="flex items-center mb-4 gap-2 shrink-0">
+    <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 pr-2">
       AI Assistant
     </h3>
-    <div
-      class="flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600"
+    <button
+      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 {tab ===
+      'query'
+        ? 'bg-slate-600 text-white dark:bg-slate-200 dark:text-slate-800'
+        : 'dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800'}"
+      on:click={() => (tab = 'query')}
+      type="button"
     >
-      <span>{apiStatusInfo.icon}</span>
-      <span class="text-gray-700 dark:text-gray-300">{apiStatus}</span>
+      Query
+    </button>
+    <button
+      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 disabled:opacity-50 {tab ===
+      'response'
+        ? 'bg-slate-600 text-white dark:bg-slate-200 dark:text-slate-800'
+        : 'dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800'}"
+      on:click={() => (tab = 'response')}
+      disabled={!llmResponse}
+      type="button"
+    >
+      Response
+    </button>
+    <div class="flex-auto" />
+    <div
+      class="flex items-center px-3 py-1 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300"
+    >
+      <Fa icon={apiStatusInfo.icon} class="inline mr-2" />
+      {apiStatus}
     </div>
   </div>
 
   <!-- AI Input Section -->
-  <div class="mb-4">
-    <div class="relative">
+  {#if tab == 'query'}
+    <div class="relative w-full min-h-0 flex-auto">
       <!-- Large Textarea Input like main query input -->
       <textarea
         bind:this={inputElement}
         bind:value={inputValue}
-        on:input={handleInput}
         on:keydown={handleKeydown}
-        class="w-full p-6 pr-20 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-y-auto min-h-[120px] max-h-[200px]"
+        class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
         placeholder="// Ask me to generate a TempoQL query or explain data patterns..."
         disabled={isLoading}
         rows="5"
       ></textarea>
 
-      <!-- History Button in top-right corner -->
-      <button
-        on:click={onHistoryClick}
-        class="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-all duration-200 flex items-center justify-center z-10 history-button"
-        title="View AI conversation history"
-      >
-        <svg
-          class="w-4 h-4"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-          ></path>
-        </svg>
-      </button>
-
-      <!-- Submit Button inside textarea -->
-      <button
-        on:click={handleSubmit}
-        disabled={!inputValue.trim() || isLoading}
-        class="absolute bottom-2 right-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1.5 text-xs z-10"
-      >
-        {#if isLoading}
-          <div
-            class="animate-spin rounded-full h-3 w-3 border-b-2 border-white"
-          ></div>
-          <span>Thinking...</span>
-        {:else}
-          <span class="text-xs">🤖</span>
-          <span>Ask</span>
-        {/if}
-      </button>
-    </div>
-  </div>
-
-  <!-- AI Response Section -->
-  <div class={scrollable ? 'flex-1 overflow-y-auto' : ''}>
-    {#if isLoading}
-      <!-- Loading State -->
       <div
-        class="bg-gray-100 dark:bg-gray-800 rounded-md border border-gray-300 dark:border-gray-600 min-h-[200px] max-h-[400px] overflow-hidden flex flex-col"
+        class="absolute right-0 bottom-0 mr-4 mb-4 flex justify-end items-center gap-2 z-50"
       >
-        <div
-          class="flex items-center space-x-3 p-4 border-b border-gray-300 dark:border-gray-600 flex-shrink-0"
+        <button
+          on:click={onHistoryClick}
+          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white"
+          title="View query history"
         >
-          <div
-            class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 dark:border-blue-400"
-          ></div>
-          <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
-            AI is thinking...
-          </h4>
-        </div>
-        <div
-          class="flex-1 overflow-y-auto p-4 flex items-center justify-center"
+          <Fa icon={faClock} class="inline mr-2" />
+          History
+        </button>
+
+        <!-- Run Button -->
+        <button
+          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
+          on:click={() => {
+            handleSubmit();
+            tab = 'response';
+          }}
+          disabled={!inputValue.trim() || isLoading}
         >
-          <span class="text-gray-600 dark:text-gray-300 text-sm font-mono"
-            >Processing your request...</span
-          >
-        </div>
+          <Fa icon={faBoltLightning} class="inline mr-2" />
+          Ask AI
+        </button>
       </div>
-    {:else if error}
-      <!-- Error State -->
-      <div
-        class="bg-gray-100 dark:bg-gray-800 rounded-md border border-gray-300 dark:border-gray-600 min-h-[200px] max-h-[400px] overflow-hidden flex flex-col"
-      >
+    </div>
+  {:else}
+    <!-- AI Response Section -->
+    <div class="h-full {scrollable ? 'overflow-auto' : ''}">
+      {#if isLoading}
+        <!-- Loading State -->
         <div
-          class="flex items-center space-x-3 p-4 border-b border-gray-300 dark:border-gray-600 flex-shrink-0"
-        >
-          <span class="text-red-500 dark:text-red-400 text-lg">⚠️</span>
+          class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 dark:border-blue-400"
+        ></div>
+        <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
+          AI is thinking...
+        </h4>
+      {:else if error}
+        <!-- Error State -->
+        <div class="flex items-center flex-col justify-center">
+          <Fa icon={faWarning} class="text-lg" />
           <h4 class="text-red-500 dark:text-red-400 font-medium text-sm">
             Error
           </h4>
-        </div>
-        <div class="flex-1 overflow-y-auto p-4">
-          <p class="text-gray-700 dark:text-gray-300 text-sm font-mono">
+          <p
+            class="text-slate-700 dark:text-slate-300 text-sm font-mono text-center max-w-full"
+          >
             {error}
           </p>
         </div>
-      </div>
-    {:else if historicalResponse}
-      <!-- Historical Response State -->
-      <div
-        class="bg-gray-100 dark:bg-gray-800 rounded-md border border-gray-300 dark:border-gray-600 min-h-[200px] max-h-[400px] overflow-hidden flex flex-col"
-      >
+      {:else if historicalResponse}
         <div
-          class="flex items-center space-x-3 p-4 border-b border-gray-300 dark:border-gray-600 flex-shrink-0"
+          class="flex items-center space-x-3 p-4 border-b border-slate-300 dark:border-slate-600 flex-shrink-0"
         >
           <span class="text-purple-600 dark:text-purple-400 text-lg">📚</span>
           <h4 class="text-purple-600 dark:text-purple-400 font-medium text-sm">
@@ -249,58 +222,23 @@
         </div>
         <div class="flex-1 overflow-y-auto p-4 ai-scrollbar">
           <div
-            class="text-gray-700 dark:text-gray-200 text-sm leading-relaxed prose prose-sm max-w-none font-mono"
+            class="text-slate-700 dark:text-slate-200 text-sm leading-relaxed prose prose-sm max-w-none font-mono"
           >
             {@html formatMessage(historicalResponse)}
           </div>
         </div>
-      </div>
-    {:else if aiExplanation || message}
-      <!-- Success State -->
-      <div
-        class="bg-gray-100 dark:bg-gray-800 rounded-md border border-gray-300 dark:border-gray-600 min-h-[200px] max-h-[400px] overflow-hidden flex flex-col"
-      >
-        <div
-          class="flex items-center space-x-3 p-4 border-b border-gray-300 dark:border-gray-600 flex-shrink-0"
-        >
-          <span class="text-blue-600 dark:text-blue-400 text-lg">🤖</span>
-          <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
-            AI Response
-          </h4>
-        </div>
-        <div class="flex-1 overflow-y-auto p-4 ai-scrollbar">
+      {:else if llmResponse}
+        <!-- Success State -->
+        <div class="flex-1 overflow-y-auto ai-scrollbar">
           <div
-            class="text-gray-700 dark:text-gray-200 text-sm leading-relaxed prose prose-sm max-w-none font-mono"
+            class="text-slate-700 dark:text-slate-200 text-sm leading-relaxed prose prose-sm max-w-none"
           >
-            {@html formatMessage(aiExplanation || message)}
+            {@html formatMessage(llmResponse)}
           </div>
         </div>
-      </div>
-    {:else}
-      <!-- Empty State -->
-      <div
-        class="bg-gray-100 dark:bg-gray-800 rounded-md border border-gray-300 dark:border-gray-600 min-h-[200px] max-h-[400px] overflow-hidden flex flex-col"
-      >
-        <div
-          class="flex items-center space-x-3 p-4 border-b border-gray-300 dark:border-gray-600 flex-shrink-0"
-        >
-          <span class="text-gray-500 dark:text-gray-400 text-lg">💡</span>
-          <h4 class="text-gray-500 dark:text-gray-400 font-medium text-sm">
-            AI Assistant
-          </h4>
-        </div>
-        <div
-          class="flex-1 overflow-y-auto p-4 flex items-center justify-center"
-        >
-          <p
-            class="text-gray-600 dark:text-gray-300 text-sm font-mono text-center"
-          >
-            // Ask me anything about your data or Tempo-QL queries!
-          </p>
-        </div>
-      </div>
-    {/if}
-  </div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>

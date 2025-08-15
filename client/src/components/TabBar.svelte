@@ -3,12 +3,12 @@
   import ThemeToggle from './ThemeToggle.svelte';
   import Fa from 'svelte-fa';
 
-  export let activeTab: string = 'data-elements';
+  export let activeTab: string = 'query-inspector';
   export let onTabChange: (tab: string) => void = () => {};
 
   const tabs = [
-    { id: 'data-elements', label: 'Data Elements', icon: faDatabase },
     { id: 'query-inspector', label: 'Query Inspector', icon: faCode },
+    { id: 'data-elements', label: 'Data Elements', icon: faDatabase },
   ];
 </script>
 

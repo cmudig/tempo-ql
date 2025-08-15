@@ -628,6 +628,9 @@ class GenericDataset:
         # or intervals.
         return_type = None
         results = []
+        # create a mapping to label events and intervals
+        concept_name_dict = {cid: f"{cid}: {cname}" for cid, cname in concepts}
+        
         for table_info in self.tables:
             if "scope" not in table_info or scope != table_info["scope"]: continue
             if "type" not in table_info: continue
@@ -652,15 +655,18 @@ class GenericDataset:
                 result = self._execute_query(conn, stmt)
                 result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
                 results.append(result_df)
-                
+            
+        concat_df = pd.concat([r for r in results if len(r)], axis=0, ignore_index=True)    
         if return_type == 'event':
-            return Events(pd.concat([r for r in results if len(r)], axis=0, ignore_index=True), 
+            concat_df['eventtype'] = concat_df['eventtype'].replace(concept_name_dict).astype('category')
+            return Events(concat_df, 
                         id_field='id',
                         type_field='eventtype',
                         time_field='time',
                         value_field='value')
         elif return_type == 'interval':
-            return Intervals(pd.concat([r for r in results if len(r)], axis=0, ignore_index=True), 
+            concat_df['intervaltype'] = concat_df['intervaltype'].replace(concept_name_dict).astype('category')
+            return Intervals(concat_df, 
                             id_field='id',
                             type_field='intervaltype',
                             start_time_field='starttime',
