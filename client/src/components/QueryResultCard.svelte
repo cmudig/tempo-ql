@@ -32,9 +32,9 @@
 </script>
 
 {#if values && values.values}
-  <div class="text-sm font-mono text-slate-700 dark:text-slate-300 mb-4">
+  <div class="text-sm text-slate-700 dark:text-slate-300 mb-4">
     <span class="font-semibold">Type:</span>
-    {values.values.type || 'Time Series'}
+    <span class="font-mono">{values.type || 'unknown'}</span>
   </div>
 
   <!-- Info rows -->
@@ -88,7 +88,7 @@
     <!-- Missingness row with dropdown -->
     {#if (values.missingness.rate.count ?? 0) > 0}
       <div
-        class="flex flex-col bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-base w-full rounded-md"
+        class="flex flex-col bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-base w-full rounded-md overflow-hidden"
       >
         <button
           class="flex items-center text-sm hover:opacity-50 gap-2 px-4 py-2"

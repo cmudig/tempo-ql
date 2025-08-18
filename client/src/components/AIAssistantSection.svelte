@@ -155,8 +155,8 @@
         bind:this={inputElement}
         bind:value={inputValue}
         on:keydown={handleKeydown}
-        class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
-        placeholder="// Ask me to generate a TempoQL query or explain data patterns..."
+        class="w-full h-full p-4 pb-16 bg-transparent text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+        placeholder="Ask me to generate, update, or explain a TempoQL query..."
         disabled={isLoading}
         rows="5"
       ></textarea>

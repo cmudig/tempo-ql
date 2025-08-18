@@ -29,7 +29,7 @@
 >
   <!-- Header with toggle button -->
   <button
-    class="block flex items-center justify-between mb-2 hover:opacity-50"
+    class="block flex items-center justify-between mb-2 bg-transparent hover:opacity-50"
     on:click={() => (enabled = !enabled)}
   >
     <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">

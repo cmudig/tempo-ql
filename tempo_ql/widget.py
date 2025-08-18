@@ -2,6 +2,7 @@ import pathlib
 import anywidget
 import traitlets
 import datetime
+import traceback
 from typing import Optional, Tuple, Any
 
 from .evaluator import QueryEngine
@@ -121,7 +122,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self.ids_length = len(self.ids)
             
             # Get concept names
-            names_df = self.query_engine.dataset.list_names()
+            names_df = self.query_engine.dataset.list_names(return_counts=True)
             self.list_names = (
                 names_df['name'].tolist() 
                 if hasattr(names_df, 'name') and 'name' in names_df.columns 
@@ -135,6 +136,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self.values = {}
             
         except Exception as e:
+            traceback.print_exc()
             print(f"⚠️ Warning: Could not initialize data state: {e}")
             self._set_empty_data_state()
 

@@ -398,7 +398,7 @@
 
     <!-- Syntax Highlighting Overlay -->
     <div
-      class="absolute top-0 left-0 w-full h-full p-4 pb-16 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words"
+      class="absolute top-0 left-0 w-full h-full p-4 pb-16 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words text-slate-900 dark:text-slate-100"
       id={highlightedViewID}
       bind:this={highlightedView}
     ></div>

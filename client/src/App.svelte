@@ -303,6 +303,10 @@
         onAnalyzeScope={(scope) => {
           handleScopeAnalysis(scope, true);
         }}
+        onInsert={(scope, selection) => {
+          $textInput = $textInput + `{${selection}; scope = ${scope}}`;
+          activeTab = 'query-inspector';
+        }}
       />
     {:else if activeTab === 'query-inspector'}
       <QueryInspectorTab

@@ -89,6 +89,13 @@ def make_series_summary(values, value_type=None):
         uniques_to_show = np.argsort(uniques)
         summary["counts"] = {str(uniques[i]): int(counts[i]) for i in uniques_to_show}
     else:
+        if pd.api.types.is_timedelta64_dtype(values.dtype):
+            summary["unit"] = "seconds"
+            values = values.dt.total_seconds()
+        elif pd.api.types.is_datetime64_dtype(values.dtype):
+            # TODO
+            summary["unit"] = "seconds since first time"
+            values = (values - values.min()).dt.total_seconds()
         summary["mean"] = np.mean(values.astype(float))
         summary["std"] = np.std(values.astype(float))
         summary["hist"] = compute_histogram(values)

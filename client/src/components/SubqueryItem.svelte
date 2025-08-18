@@ -54,5 +54,16 @@
       <!-- Values section -->
       <QueryResultCard values={data.result} />
     </div>
+    {#if data.dataset_queries && data.dataset_queries.length > 0}
+      <div class="p-4 border-t border-slate-200 dark:border-slate-700">
+        <div class="text-xs font-semibold text-slate-500 mb-1 uppercase">
+          SQL Queries
+        </div>
+        {#each data.dataset_queries as sql}
+          <pre
+            class="bg-white dark:bg-slate-900 text-xs font-mono p-2 rounded">{sql}</pre>
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>

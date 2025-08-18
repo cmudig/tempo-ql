@@ -2,6 +2,7 @@ import os
 import re
 from typing import Optional, Dict, Any, List, Tuple
 import json
+import traceback
 from tempo_ql.generic.dataset import ConceptFilter
 
 search_concepts_function = {
@@ -59,6 +60,7 @@ class AIAssistant:
                 self.config = types.GenerateContentConfig(tools=[tools])
                 self.is_enabled = True
             except Exception as e:
+                traceback.print_exc()
                 print(f"Warning: Failed to initialize Gemini client: {e}")
                 self.is_enabled = False
     
@@ -400,6 +402,7 @@ Please format your response with:
                     config=self.config
                 )
             except Exception as e:
+                traceback.print_exc()
                 raise Exception(f"Error calling Gemini API: {str(e)}")
             
             print("Gemini response:", response.candidates[0].content)
@@ -430,6 +433,7 @@ Please format your response with:
                         contents.append(types.Content(role="user", parts=[function_response]))
 
                     except Exception as e:
+                        traceback.print_exc()
                         raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
             else:
                 return response.text
@@ -536,6 +540,7 @@ Please format your response with:
             return processed_response
             
         except Exception as e:
+            traceback.print_exc()
             return {
                 'extracted_query': None,
                 'explanation': f"Error processing question: {str(e)}",
@@ -571,6 +576,7 @@ Please format your response with:
             }
             
         except Exception as e:
+            traceback.print_exc()
             return {
                 "success": False,
                 "message": f"Connection failed: {str(e)}",

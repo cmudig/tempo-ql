@@ -9,6 +9,7 @@
   export let loadingMessage: string = '';
   export let onScopeSelect: (scope: string) => void = () => {};
   export let onAnalyzeScope: (scope: string) => void = () => {};
+  export let onInsert: (scope: string, selection: string) => void = () => {};
 
   // Real analysis data from backend
   $: isAnalyzed =
@@ -16,15 +17,12 @@
     scopeConcepts &&
     scopeConcepts.scope_name === selectedScope;
   $: concepts =
-    isAnalyzed && scopeConcepts.concepts
-      ? scopeConcepts.concepts.map((concept) => ({
-          name: concept.name,
-          type: concept.type,
-          count: concept.count,
-        }))
-      : [];
+    isAnalyzed && scopeConcepts.concepts ? scopeConcepts.concepts : [];
 
-  $: if (!selectedScope && scopes.length > 0) selectedScope = scopes[0];
+  $: if (!selectedScope && scopes.length > 0) {
+    selectedScope = scopes[0];
+    onScopeSelect(selectedScope);
+  }
 </script>
 
 <div class="flex h-full {width} overflow-hidden">
@@ -48,7 +46,7 @@
               class="w-full text-left px-3 py-2 rounded-md text-sm transition-colors duration-200 {selectedScope ===
               scope
                 ? 'bg-blue-100 dark:bg-blue-500 text-blue-700 dark:text-white font-medium'
-                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600'}"
+                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:bg-slate-700 dark:hover:bg-slate-600'}"
               on:click={() => {
                 selectedScope = scope;
                 onScopeSelect(scope);
@@ -69,14 +67,6 @@
   <!-- Main Content Area -->
   <div class="flex-auto bg-white dark:bg-slate-900 p-6 flex flex-col h-full">
     {#if selectedScope}
-      <!-- Selected Scope Header -->
-      <div class="pb-6 shrink-0">
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100">
-          {selectedScope}
-        </h2>
-        <div class="mt-2 h-1 w-16 bg-blue-600 dark:bg-blue-400 rounded"></div>
-      </div>
-
       <!-- Scope Content -->
       <ScopeContent
         scopeName={selectedScope}
@@ -85,6 +75,7 @@
         {loadingMessage}
         {concepts}
         {scopeConcepts}
+        {onInsert}
         onAnalyze={() => onAnalyzeScope(selectedScope)}
       />
     {:else}

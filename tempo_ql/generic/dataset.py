@@ -147,8 +147,16 @@ class GenericDataset:
         Returns a string representation of the table context suitable for passing
         to an LLM.
         """
+        def sanitize(o):
+            # recursively remove any keys whose values are not numbers, strings, lists, or dicts
+            if isinstance(o, dict):
+                return {k: sanitize(v) for k, v in o.items() if isinstance(v, (str, int, float, list, dict, bool, type(None)))}
+            elif isinstance(o, list):
+                return [sanitize(v) for v in o if isinstance(v, (str, int, float, list, dict, bool, type(None)))]
+            return o
+            
         return json.dumps([
-            {k: v for k, v in table.items() if k not in ("id_field", "start_time_field", "end_time_field", "time_field")}
+            sanitize({k: v for k, v in table.items() if k not in ("id_field", "start_time_field", "end_time_field", "time_field")})
             for table in self.tables
         ])
         
@@ -159,7 +167,7 @@ class GenericDataset:
     def __del__(self):
         if self.connection is not None: self.connection.close()
         
-    def _get_table(self, table_info):
+    def _get_table(self, table_info, limit_columns=None):
         """Attempt to get the SQLAlchemy Table reference from the existing metadata,
         or autoload it. Also join the table as needed to get the relevant ID fields."""
         try:
@@ -167,8 +175,10 @@ class GenericDataset:
         except KeyError:
             table = Table(table_info["source"], self.metadata, autoload_with=self.engine)
             
+        limit_columns = tuple(sorted(set(limit_columns))) if limit_columns else None
+        
         if table_info["source"] in self.id_field_joins:
-            if table_info["source"] not in self._cte_cache:
+            if (table_info["source"], limit_columns) not in self._cte_cache:
                 join_info = self.id_field_joins[table_info["source"]]
                 if "dest_table" not in join_info:
                     raise ValueError(f"ID field join information for table {table_info['source']} needs a 'dest_table' key")
@@ -182,6 +192,7 @@ class GenericDataset:
                 join_type = join_info.get("join_type", "inner")
                 src_join_key = join_info.get("src_join_key", join_info.get("join_key"))
                 dest_join_key = join_info.get("dest_join_key", join_info.get("join_key"))
+                final_limit_columns = set([*limit_columns, src_join_key]) if limit_columns is not None else None
                 if join_type in ("left", "inner"):
                     join_clause = table.join(
                         dest_table, 
@@ -198,15 +209,15 @@ class GenericDataset:
                     raise ValueError(f"ID field join type for table {table_info['source']} should be 'left', 'inner', or 'right', not '{join_type}'")
                 
                 stmt = select(
-                    *table.c,
+                    *(table.c if final_limit_columns is None else [table.c[c] for c in final_limit_columns if c in table.c]),
                     dest_table.c[table_info["id_field"]],
                     *(dest_table.c[f] for f in join_info.get("keep_fields", []) if f != table_info["id_field"])
                 ).select_from(join_clause)
                 if "where_clause" in join_info:
                     stmt = stmt.where(join_info["where_clause"](table, dest_table))
                     
-                self._cte_cache[table_info["source"]] = stmt.cte(f"{table_info['source']}_id_joined")
-            return self._cte_cache[table_info["source"]]
+                self._cte_cache[(table_info["source"], limit_columns)] = stmt.cte(f"{table_info['source']}_id_joined")
+            return self._cte_cache[(table_info["source"], limit_columns)]
         return table
         
     def _limit_trajectory_ids(self, base_table, id_field):
@@ -216,8 +227,9 @@ class GenericDataset:
         if self._trajectory_id_table is not None:
             if self.verbose:
                 print("\tJoining to trajectory ID table")
-            return base_table.join(self._trajectory_id_table,
+            result = base_table.join(self._trajectory_id_table,
                                    self.id_field_transform(base_table.c[id_field]) == self._trajectory_id_table.c[TRAJECTORY_ID_TABLE_ID_FIELD])
+            return result
         return base_table
     
     def get_ids(self):
@@ -228,11 +240,13 @@ class GenericDataset:
         with self.engine.connect() as conn:
             unioned_tables = union(*(
                 select(
-                    distinct(self.id_field_transform(self._get_table(table).c[table["id_field"]])).label("id")
+                    # distinct(self.id_field_transform(self._get_table(table).c[table["id_field"]])).label("id")
+                    distinct(self.id_field_transform(
+                            self._get_table(table, limit_columns=[table["id_field"]]).c[table["id_field"]])).label("id")
                 ) for table in self.tables
                 if "source" in table and "id_field" in table
             )).cte('all_ids')
-            stmt = select(unioned_tables.c["id"]).distinct()
+            stmt = select(unioned_tables.c["id"]).distinct().select_from(self._limit_trajectory_ids(unioned_tables, "id"))
             if self.verbose:
                 print(f"Querying all known tables to get the list of trajectory IDs")
             result = self._execute_query(conn, stmt).fetchall()
@@ -940,129 +954,132 @@ class GenericDataset:
             if self.verbose:
                 print(f"Retrieving concepts for table '{table_info['source']}'")
                 
-            scope_names = []
-            if 'attributes' in table_info:
-                if return_counts:
-                    with self.engine.connect() as conn:
-                        table_count = select(
-                            func.count()
-                        ).select_from(self._limit_trajectory_ids(
-                            table, table_info['id_field']
-                        ))
-                        table_count = self._execute_query(conn, table_count).fetchone()[0]
-                else:
-                    table_count = None
-                scope_names.append(pd.DataFrame([{
-                    'name': attr,
-                    'id': attr,
-                    'type': 'attribute',
-                    'scope': table_info.get('scope'),
-                    **({'count': table_count} if table_count is not None else {})
-                } for attr in table_info['attributes']]))
-                
-            if 'type' not in table_info: continue
-            
-            if 'event_type' in table_info or 'interval_type' in table_info:
-                type_field = 'event_type' if 'event_type' in table_info else 'interval_type'
-                if return_counts:
-                    with self.engine.connect() as conn:
-                        table_count = select(
-                            func.count()
-                        ).select_from(self._limit_trajectory_ids(
-                            table, table_info['id_field']
-                        ))
-                        result = self._execute_query(conn, table_count).fetchone()[0]
-                        scope_names.append(pd.DataFrame([{'name': table_info[type_field], 
-                                                          'id': table_info[type_field],
-                                                         'type': table_info['type'],
-                                                         'scope': table_info.get('scope'), 
-                                                         'count': result}]))
-                else:
-                    scope_names.append(pd.DataFrame([{'name': table_info[type_field], 
-                                                      'id': table_info[type_field], 
-                                                     'scope': table_info.get('scope'),
-                                                     'type': table_info['type']}]))
-            elif 'event_type_field' in table_info or 'interval_type_field' in table_info:
-                type_field = 'event_type_field' if 'event_type_field' in table_info else 'interval_type_field'
-                with self.engine.connect() as conn:
+            try:
+                scope_names = []
+                if 'attributes' in table_info:
                     if return_counts:
-                        stmt = select(
-                            table.c[table_info[type_field]].label('name'),
-                            func.count().label('count')
-                        ).select_from(self._limit_trajectory_ids(
-                            table, table_info['id_field']
-                        )).group_by(
-                            table.c[table_info[type_field]]
-                        )
-                    else:
-                        stmt = select(distinct(table.c[table_info[type_field]].label('name')))
-                    result = self._execute_query(conn, stmt)
-                    result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                    result_df = result_df.assign(
-                        id=result_df['name'],
-                        scope=table_info.get('scope'), 
-                        type=table_info['type'])
-                    scope_names.append(result_df)
-            elif 'events' in table_info or 'intervals' in table_info:
-                type_field = 'events' if 'events' in table_info else 'intervals'
-                with self.engine.connect() as conn:
-                    for event, event_info in table_info[type_field].items():
-                        if return_counts:
-                            stmt = select(
+                        with self.engine.connect() as conn:
+                            table_count = select(
                                 func.count()
                             ).select_from(self._limit_trajectory_ids(
                                 table, table_info['id_field']
                             ))
-                            if event_info.get('filter_nulls', False) and 'value_field' in event_info:
-                                stmt = stmt.where(table.c[event_info['value_field']] != None)
-                                
-                            print("Getting count for", stmt)
-                            result = self._execute_query(conn, stmt).fetchone()[0]
-                            scope_names.append(pd.DataFrame([{'name': event, 
-                                                              'id': event,
-                                                             'scope': table_info.get('scope'), 
-                                                             'count': result, 
-                                                             'type': table_info['type']}]))
+                            table_count = self._execute_query(conn, table_count).fetchone()[0]
+                    else:
+                        table_count = None
+                    scope_names.append(pd.DataFrame([{
+                        'name': attr,
+                        'id': attr,
+                        'type': 'attribute',
+                        'scope': table_info.get('scope'),
+                        **({'count': table_count} if table_count is not None else {})
+                    } for attr in table_info['attributes']]))
+                    
+                if 'type' not in table_info: continue
+                
+                if 'event_type' in table_info or 'interval_type' in table_info:
+                    type_field = 'event_type' if 'event_type' in table_info else 'interval_type'
+                    if return_counts:
+                        with self.engine.connect() as conn:
+                            table_count = select(
+                                func.count()
+                            ).select_from(self._limit_trajectory_ids(
+                                table, table_info['id_field']
+                            ))
+                            result = self._execute_query(conn, table_count).fetchone()[0]
+                            scope_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                                                            'id': table_info[type_field],
+                                                            'type': table_info['type'],
+                                                            'scope': table_info.get('scope'), 
+                                                            'count': result}]))
+                    else:
+                        scope_names.append(pd.DataFrame([{'name': table_info[type_field], 
+                                                        'id': table_info[type_field], 
+                                                        'scope': table_info.get('scope'),
+                                                        'type': table_info['type']}]))
+                elif 'event_type_field' in table_info or 'interval_type_field' in table_info:
+                    type_field = 'event_type_field' if 'event_type_field' in table_info else 'interval_type_field'
+                    with self.engine.connect() as conn:
+                        if return_counts:
+                            stmt = select(
+                                table.c[table_info[type_field]].label('name'),
+                                func.count().label('count')
+                            ).select_from(self._limit_trajectory_ids(
+                                table, table_info['id_field']
+                            )).group_by(
+                                table.c[table_info[type_field]]
+                            )
                         else:
-                            scope_names.append(pd.DataFrame([{'name': table_info['event_type'], 
-                                                              'id': event,
-                                                             'scope': table_info.get('scope'),
-                                                             'type': table_info['type']}]))
-            elif 'concept_id_field' in table_info:
-                # join against the vocabulary
-                vocabulary_tables = []
-                for vocabulary in self.vocabularies:
-                    if scope is not None and "scopes" in vocabulary and scope not in vocabulary["scopes"]:
-                        continue
-                    
-                    concept_id_field = vocabulary.get('concept_id_field', 'concept_id')
-                    concept_name_field = vocabulary.get('concept_name_field', 'concept_name')
-                    if "source" not in vocabulary: raise ValueError("Vocabulary must have a source")
-                    
-                    vocab_table = self._get_table(vocabulary)
-                    vocab_stmt = select(
-                        vocab_table.c[concept_id_field].label("id"),
-                        vocab_table.c[concept_name_field].label("name")
-                    )
-                    if vocabulary.get('scope_field', 'scope') in vocab_table.c and 'scope' in table_info:
-                        vocab_stmt = vocab_stmt.where(vocab_table.c[vocabulary.get('scope_field', 'scope')] == table_info['scope'])
-                    vocabulary_tables.append(vocab_stmt)
-                vocabulary_tables = union(*vocabulary_tables).cte('vocab')
-                with self.engine.connect() as conn:
-                    stmt = select(
-                        vocabulary_tables.c['id'],
-                        vocabulary_tables.c['name'],
-                        *([func.count().label('count')] if return_counts else [])
-                    ).distinct().select_from(
-                        table.join(vocabulary_tables,
-                                   table.c[table_info['concept_id_field']] == vocabulary_tables.c['id'])
-                    ).group_by(vocabulary_tables.c['name'], vocabulary_tables.c['id'])
-                    result = self._execute_query(conn, stmt)
-                    result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys())).assign(
-                        scope=table_info.get('scope'),
-                        type=table_info['type']
-                    )
-                    scope_names.append(result_df)
+                            stmt = select(distinct(table.c[table_info[type_field]].label('name')))
+                        result = self._execute_query(conn, stmt)
+                        result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                        result_df = result_df.assign(
+                            id=result_df['name'],
+                            scope=table_info.get('scope'), 
+                            type=table_info['type'])
+                        scope_names.append(result_df)
+                elif 'events' in table_info or 'intervals' in table_info:
+                    type_field = 'events' if 'events' in table_info else 'intervals'
+                    with self.engine.connect() as conn:
+                        for event, event_info in table_info[type_field].items():
+                            if return_counts:
+                                stmt = select(
+                                    func.count()
+                                ).select_from(self._limit_trajectory_ids(
+                                    table, table_info['id_field']
+                                ))
+                                if event_info.get('filter_nulls', False) and 'value_field' in event_info:
+                                    stmt = stmt.where(table.c[event_info['value_field']] != None)
+                                    
+                                print("Getting count for", stmt)
+                                result = self._execute_query(conn, stmt).fetchone()[0]
+                                scope_names.append(pd.DataFrame([{'name': event, 
+                                                                'id': event,
+                                                                'scope': table_info.get('scope'), 
+                                                                'count': result, 
+                                                                'type': table_info['type']}]))
+                            else:
+                                scope_names.append(pd.DataFrame([{'name': table_info['event_type'], 
+                                                                'id': event,
+                                                                'scope': table_info.get('scope'),
+                                                                'type': table_info['type']}]))
+                elif 'concept_id_field' in table_info:
+                    # join against the vocabulary
+                    vocabulary_tables = []
+                    for vocabulary in self.vocabularies:
+                        if scope is not None and "scopes" in vocabulary and scope not in vocabulary["scopes"]:
+                            continue
+                        
+                        concept_id_field = vocabulary.get('concept_id_field', 'concept_id')
+                        concept_name_field = vocabulary.get('concept_name_field', 'concept_name')
+                        if "source" not in vocabulary: raise ValueError("Vocabulary must have a source")
+                        
+                        vocab_table = self._get_table(vocabulary)
+                        vocab_stmt = select(
+                            vocab_table.c[concept_id_field].label("id"),
+                            vocab_table.c[concept_name_field].label("name")
+                        )
+                        if vocabulary.get('scope_field', 'scope') in vocab_table.c and 'scope' in table_info:
+                            vocab_stmt = vocab_stmt.where(vocab_table.c[vocabulary.get('scope_field', 'scope')] == table_info['scope'])
+                        vocabulary_tables.append(vocab_stmt)
+                    vocabulary_tables = union(*vocabulary_tables).cte('vocab')
+                    with self.engine.connect() as conn:
+                        stmt = select(
+                            vocabulary_tables.c['id'],
+                            vocabulary_tables.c['name'],
+                            *([func.count().label('count')] if return_counts else [])
+                        ).distinct().select_from(
+                            table.join(vocabulary_tables,
+                                    table.c[table_info['concept_id_field']] == vocabulary_tables.c['id'])
+                        ).group_by(vocabulary_tables.c['name'], vocabulary_tables.c['id'])
+                        result = self._execute_query(conn, stmt)
+                        result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys())).assign(
+                            scope=table_info.get('scope'),
+                            type=table_info['type']
+                        )
+                        scope_names.append(result_df)
+            except Exception as e:
+                raise type(e)(f"Error listing data elements for scope '{table_info['scope']}': {e}")
             self._name_list_cache[cache_key] = scope_names
             type_names += scope_names
         

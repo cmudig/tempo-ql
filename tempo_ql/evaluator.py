@@ -17,7 +17,7 @@ start: variable_expr | variable_list
 
 time_index: EVERY atom [time_bounds]            -> periodic_time_index // periodic time literal
     | ATEVERY atom [time_bounds]  -> event_time_index
-    | AT "(" expr ("," expr)* ")"             -> array_time_index
+    | AT OPENPAREN expr (COMMA expr)* CLOSEPAREN             -> array_time_index
 
 time_bounds: FROM expr TO expr              -> time_bounds_both_ends
     | BEFORE expr                              -> time_bounds_upper
@@ -25,7 +25,7 @@ time_bounds: FROM expr TO expr              -> time_bounds_both_ends
     | AT expr                               -> time_bounds_instant
 
 variable_list: variable_expr
-    | "(" variable_expr ("," variable_expr)* ")"
+    | OPENPAREN variable_expr (COMMA variable_expr)* CLOSEPAREN
 variable_expr: [named_variable] expr
 named_variable: (/[A-Za-z][^:]*/i | VAR_NAME) ":"
 
@@ -37,17 +37,17 @@ agg_method: VAR_NAME AGG_OPTIONS* AGG_TYPE?
 AGG_TYPE: "rate"i|"amount"i|"value"i|"duration"i
 AGG_OPTIONS: "distinct"i|"nonnull"i
 
-?cut_names: "NAMED"i value_list
+?cut_names: NAMED value_list
 ?cut_expr: LITERAL CUT_TYPE [cut_names]        -> auto_cut
     | CUT_TYPE value_list [cut_names]          -> manual_cut
 CUT_TYPE: /bins?/i|/quantiles?/i
 
 ?expr: variable_list time_index             -> time_series
-    | expr "WHERE"i expr                    -> where_clause
-    | expr "CARRY"i (time_quantity | step_quantity)  -> carry_clause
-    | expr "IMPUTE"i (expr | MEAN | MEDIAN)            -> impute_clause
-    | expr "WITH"i VAR_NAME "AS"i logical   -> with_clause
-    | expr "CUT"i cut_expr                  -> cut_clause
+    | expr WHERE expr                    -> where_clause
+    | expr CARRY (time_quantity | step_quantity)  -> carry_clause
+    | expr IMPUTE (expr | MEAN | MEDIAN)            -> impute_clause
+    | expr WITH VAR_NAME "AS"i logical   -> with_clause
+    | expr CUT cut_expr                  -> cut_clause
     | logical
     
 ?logical: logical "AND"i negation                -> logical_and
@@ -85,9 +85,9 @@ CUT_TYPE: /bins?/i|/quantiles?/i
 ?exponent: exponent "^" atom                      -> expr_pow
     | atom
 
-value_list: ("("|"[") LITERAL ("," LITERAL)* (")"|"]")
+value_list: (OPENPAREN|OPENBRACK) LITERAL (COMMA LITERAL)* (CLOSEPAREN|CLOSEBRACK)
 
-atom: VAR_NAME "(" expr ("," expr)* ")"                 -> function_call
+atom: VAR_NAME OPENPAREN expr (COMMA expr)* CLOSEPAREN                 -> function_call
     | data_element_query ["AS"i UNIT]                   -> data_element
     | time_quantity
     | LITERAL                               -> literal
@@ -97,15 +97,15 @@ atom: VAR_NAME "(" expr ("," expr)* ")"                 -> function_call
     | MAXTIME                              -> max_time
     | INDEXVALUE                            -> index_value
     | CASE (case_when)+ ELSE expr END -> case_expr     // if/else
-    | "(" expr ")" "AS"i UNIT                      -> unit_expr
-    | "(" expr ")"
+    | expr "AS"i UNIT                      -> unit_expr
+    | OPENPAREN expr CLOSEPAREN            -> paren_expr
     | VAR_NAME                               -> var_name
 
 time_quantity: LITERAL UNIT
 step_quantity: LITERAL /steps?/i
 UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 
-?data_element_query: "{" data_element_query_el (";" data_element_query_el)* "}" -> data_element_query_list
+?data_element_query: OPENBRACE data_element_query_el (";" data_element_query_el)* CLOSEBRACE -> data_element_query_list
 ?data_element_query_el: /id|name|type|value|scope/i ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
     | /id|name|type|value|scope/i ("IN"i) value_list                       -> data_element_in
     | /id|name|type|value|scope/i PATTERN_CMD LITERAL -> data_element_pattern
@@ -132,10 +132,23 @@ FROM: "FROM"i
 TO: "TO"i
 MEAN: "MEAN"i
 MEDIAN: "MEDIAN"i
+NAMED: "NAMED"i
+WHERE: "WHERE"i
+CARRY: "CARRY"i
+IMPUTE: "IMPUTE"i
+WITH: "WITH"i
+CUT: "CUT"i
 
 LITERAL: SIGNED_NUMBER | QUOTED_STRING | /-?inf(inity)?/i | /\\/(?!\\/)(\\\\\/|\\\\\\\|[^\\/])*?\\/i?/
 QUOTED_STRING: /["'`][^"'`]*["'`]/
 
+OPENPAREN: "("
+CLOSEPAREN: ")"
+OPENBRACK: "["
+CLOSEBRACK: "]"
+OPENBRACE: "{"
+CLOSEBRACE: "}"
+COMMA: ","
 
 %import common (WORD, WS, SIGNED_NUMBER, LETTER)
 
@@ -190,7 +203,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def _log_subquery(self, subtree, subresult, **kwargs):
         """Logs information about the given subquery and returns the subquery result."""
         if not self._logging_subqueries: return subresult
-        self._subqueries[subtree] = { "result": subresult, **kwargs }
+        self._subqueries[subtree] = { **self._subqueries.get(subtree, {}), "result": subresult, **kwargs }
         return subresult
                 
     def get_all_ids(self):
@@ -212,7 +225,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         return {"name": ("equals", query)}
 
     def data_element_query_list(self, tree):
-        return {k: v for child in tree.children for k, v in self.visit(child).items()}
+        return {k: v for child in tree.children[1:-1] for k, v in self.visit(child).items()}
         
     def data_element_eq(self, tree):
         field, value_spec = tree.children
@@ -414,6 +427,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
         expr, unit = tree.children
         return self.visit(expr) / Duration(1, unit)
     
+    def paren_expr(self, tree):
+        return self.visit(tree.children[1])
+    
     def min_time(self, tree):
         if self._mintimes is not None: return self._mintimes
         self._mintimes = self.dataset.get_min_times()
@@ -429,7 +445,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def isnotin(self, tree):
         return ~self.visit(tree.children[0]).isin(self.visit(tree.children[1]))
     
-    def value_list(self, tree): return [self._parse_literal(v) for v in tree.children]
+    def value_list(self, tree): return [self._parse_literal(v) for v in tree.children[1:-1:2]]
         
     def expr_add(self, tree): return self.visit(tree.children[0]) + self.visit(tree.children[1])
     def expr_sub(self, tree): return self.visit(tree.children[0]) - self.visit(tree.children[1])
@@ -554,11 +570,11 @@ class EvaluateQuery(lark.visitors.Interpreter):
         # carried forward within a given ID
         var_exp = self.visit(tree.children[0])
         if isinstance(var_exp, Compilable): raise NotImplementedError("Carry forward not yet implemented for nested aggregations")
-        if isinstance(tree.children[1], lark.Tree) and tree.children[1].data == "step_quantity":
-            steps = int(tree.children[1].children[0].value)
+        if isinstance(tree.children[-1], lark.Tree) and tree.children[1].data == "step_quantity":
+            steps = int(tree.children[-1].children[0].value)
             return var_exp.carry_forward_steps(steps)
         else:
-            return var_exp.carry_forward_duration(tree.children[1])
+            return var_exp.carry_forward_duration(tree.children[-1])
             
     @lark.v_args(tree=True)
     def step_quantity(self, tree):
@@ -569,20 +585,20 @@ class EvaluateQuery(lark.visitors.Interpreter):
         var_exp = self.visit(tree.children[0])
         if isinstance(var_exp, Compilable):
             method = "constant"
-            if tree.children[1].value in ("mean", "median"):
-                method = tree.children[1].value
+            if tree.children[-1].value in ("mean", "median"):
+                method = tree.children[-1].value
                 constant_value = None
             else:
-                constant_value = self._parse_literal(tree.children[1].value)
+                constant_value = self._parse_literal(tree.children[-1].value)
             return var_exp.impute(method=method, constant_value=constant_value)
         
         nan_mask = ~var_exp.isna()
-        if isinstance(tree.children[1], lark.Token) and tree.children[1].value in ("mean", "median"):
-            impute_method = tree.children[1].value.lower()
+        if isinstance(tree.children[-1], lark.Token) and tree.children[-1].value in ("mean", "median"):
+            impute_method = tree.children[-1].value.lower()
             numpy_func = {"mean": np.nanmean, "median": np.nanmedian}[impute_method]
             return var_exp.replace(pd.NA, np.nan).astype(np.float64).where(nan_mask, numpy_func(var_exp.get_values().replace(pd.NA, np.nan).astype(float)))
         else:
-            impute_method = self.visit(tree.children[1])
+            impute_method = self.visit(tree.children[-1])
             dtype = var_exp.get_values().dtype
             if isinstance(dtype, pd.CategoricalDtype):
                 var_exp = var_exp.with_values(var_exp.get_values().astype(dtype.categories.dtype))
@@ -698,7 +714,8 @@ class EvaluateQuery(lark.visitors.Interpreter):
             raise ValueError(f"Unknown function '{function_name}'")
 
     def variable_list(self, tree):
-        args = [self.visit(arg) for arg in tree.children]
+        filtered_children = [c for c in tree.children if not isinstance(c, lark.Token) or c.type not in ("OPENPAREN", "CLOSEPAREN")]
+        args = [self.visit(arg) for arg in filtered_children]
         if len(args) == 1: return args[0]
         if all(isinstance(a, Attributes) for a in args):
             return AttributeSet(pd.concat([a.series for a in args], axis=1))
@@ -711,15 +728,15 @@ class EvaluateQuery(lark.visitors.Interpreter):
         if not isinstance(num_bins, (float, int)) and int(num_bins) == num_bins:
             raise ValueError("Cut must either be followed by an integer bin count or a list of bin cutoffs")
         cut_type = tree.children[1].value
-        return CutOperator(int(num_bins), cut_type, names=tree.children[2] if len(tree.children) > 2 else None)
+        return CutOperator(int(num_bins), cut_type, names=tree.children[3] if len(tree.children) > 3 else None)
     
     def manual_cut(self, tree):
         cut_type = tree.children[0].value
         bins = self.visit(tree.children[1])
-        return CutOperator(np.array(bins), cut_type, names=tree.children[2] if len(tree.children) > 2 else None)
+        return CutOperator(np.array(bins), cut_type, names=tree.children[3] if len(tree.children) > 3 else None)
     
     def cut_clause(self, tree):
-        base_values, cut_op = tree.children
+        _, base_values, cut_op = tree.children
         return self.visit(cut_op).apply(self.visit(base_values))
         
 
@@ -787,7 +804,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         return self._log_subquery(tree, index)
         
     def array_time_index(self, tree):
-        times = [self.visit(c) for c in tree.children[1:]]
+        times = [self.visit(c) for c in tree.children[2:-1]]
         return self._log_subquery(tree, TimeIndex.from_times(times))
         
     def variable_expr(self, tree, cache_only=False):            
@@ -953,11 +970,8 @@ class EvaluateQuery(lark.visitors.Interpreter):
             subqueries = {}
             for subtree, query_info in self._subqueries.items():
                 # map each subquery to its location in the original query text
-                initial_min_pos = min(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
-                min_pos = max((token.end_pos for token in tree.scan_values(lambda x: isinstance(x, lark.Token)) if token.end_pos <= initial_min_pos), default=-1) + 1
-                # for the maximum token, find the minimum position of the *next* leaf in the tree
-                initial_max_pos = max(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
-                max_pos = min((token.start_pos for token in tree.scan_values(lambda x: isinstance(x, lark.Token)) if token.start_pos > initial_max_pos), default=len(query_string))
+                min_pos = min(token.start_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
+                max_pos = max(token.end_pos for token in subtree.scan_values(lambda x: isinstance(x, lark.Token)))
                 
                 subquery = query_string[min_pos:max_pos].strip()
                 print(list((token.start_pos, token.end_pos) for token in subtree.scan_values(lambda x: isinstance(x, lark.Token))), subquery)
@@ -965,6 +979,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 subqueries[subquery] = query_info
             result = (result, subqueries)
         self._subqueries = None
+        self._logging_subqueries = False
         return result
         
     def start(self, tree):
