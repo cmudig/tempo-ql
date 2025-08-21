@@ -58,6 +58,7 @@ class AIAssistant:
                 self.genai_client = genai.Client(api_key=self.api_key)
                 tools = types.Tool(function_declarations=[search_concepts_function])
                 self.config = types.GenerateContentConfig(tools=[tools])
+                self.fast_config = types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0))
                 self.is_enabled = True
             except Exception as e:
                 traceback.print_exc()
@@ -109,7 +110,7 @@ class AIAssistant:
         """
         return self.is_enabled and self.genai_client is not None
     
-    def _create_data_analysis_prompt(self, user_question: str, table_context: str) -> str:
+    def _create_data_analysis_prompt(self, user_question: str, table_context: str, existing_query: Optional[str] = None) -> str:
         """
         Create a context-aware prompt for data analysis.
         
@@ -132,6 +133,9 @@ Instruction: <INSTRUCTION>
 
         base_prompt = base_prompt.replace("<DATASET_INFO>", table_context)
         base_prompt = base_prompt.replace("<INSTRUCTION>", user_question)
+        
+        if existing_query is not None:
+            base_prompt += f"\n\nExisting query:\n```tempoql\n{existing_query}\n```"
 
         return base_prompt
     
@@ -186,88 +190,50 @@ Include only the steps that actually exist in the query.
 {question}
 """
     
-    def _is_query_generation_request(self, question: str) -> bool:
+    def _make_query_validation_prompt(self, question: str, query_text: Optional[str] = None) -> bool:
         """
-        Determine if the user is asking for query generation related to data analysis.
+        Determine if the user is asking a relevant query and determine the type of query it is.
         
         Args:
             question: The user's question
             
         Returns:
-            True if the question is asking for TempoQL query generation
+            a prompt to check the type of query
         """
-        question_lower = question.lower()
-        
-        # Keywords that indicate data analysis/query generation requests
-        generation_keywords = [
-            # Direct query requests
-            'query', 'find', 'get', 'show', 'analyze', 'analysis', 'calculate', 'count',
-            'measure', 'extract', 'retrieve', 'select', 'filter', 'search',
-            
-            # Temporal analysis keywords
-            'time', 'temporal', 'before', 'after', 'during', 'between', 'every',
-            'daily', 'weekly', 'monthly', 'hourly', 'interval', 'period',
-            
-            # Medical/data analysis terms
-            'patient', 'diagnosis', 'medication', 'treatment', 'procedure', 'measurement',
-            'vital', 'lab', 'test', 'observation', 'condition', 'drug', 'device',
-            'encounter', 'visit', 'admission', 'discharge',
-            
-            # Analysis operations
-            'average', 'mean', 'median', 'sum', 'total', 'maximum', 'minimum',
-            'first', 'last', 'latest', 'earliest', 'recent', 'trend', 'pattern',
-            'frequency', 'rate', 'duration', 'length', 'timeline',
-            
-            # Data exploration
-            'what', 'when', 'how many', 'how often', 'which', 'where'
-        ]
-        
-        # Check if any generation keywords are present
-        for keyword in generation_keywords:
-            if keyword in question_lower:
-                return True
-                
-        # Check for question patterns that suggest data analysis
-        question_patterns = [
-            'can you', 'could you', 'please', 'i want', 'i need', 'help me',
-            'create', 'generate', 'build', 'make', 'write'
-        ]
-        
-        for pattern in question_patterns:
-            if pattern in question_lower:
-                return True
-        
-        return False
-    
-    def _contains_tempoql_query(self, question: str) -> bool:
-        """
-        Check if the question contains a TempoQL query to explain.
-        
-        Args:
-            question: The user's question
-            
-        Returns:
-            True if the question contains TempoQL syntax
-        """
-        # Look for TempoQL syntax patterns
-        tempoql_patterns = [
-            '{', '}',  # Data elements
-            'every', 'before', 'after', 'at', 'during',  # Temporal operators
-            '#now', '#start', '#end',  # Time references
-            'mean', 'sum', 'count', 'first', 'last',  # Aggregation functions
-            'contains', 'scope =', 'name =', 'id =',  # Query syntax
-        ]
-        
-        question_lower = question.lower()
-        
-        # Check for TempoQL patterns
-        pattern_count = 0
-        for pattern in tempoql_patterns:
-            if pattern in question_lower:
-                pattern_count += 1
-        
-        # If we find multiple TempoQL patterns, it's likely a query
-        return pattern_count >= 2
+        return f"""
+You are a helpful data analysis assistant. You are an expert on a new query language called TempoQL that is specialized to deal with electronic health record data. TempoQL queries operate on time-series medical data.
+
+Your job is to take a user-provided question and determine if it is a valid TempoQL question and if the user's existing query text is relevant to answer the question.
+The user might have written a previous existing query that's unrelated to their current question. You need to determine whether that existing query is needed for the new question.
+Valid TempoQL questions can ask you to generate a new query, take an existing query and update it, answer questions about an existing query, or answer general questions about TempoQL.
+If the question is valid, tell me whether the existing query is needed to answer the question or not by outputting the single word 'yes' (existing query is needed to answer) or 'no' (existing query not needed).
+If the question is invalid, output the single word 'invalid'.
+
+Question:
+can you help me extract the patient's heart rate every hour
+Query text:
+mean {{Hemoglobin; scope = Measurement}} before #now impute mean every 6 hours
+Output:
+no
+
+Question:
+run every day instead of every 5 days
+Query text:
+last {{Weight; scope = Observation}} from #now - 1 day to #now every 5 days
+Output:
+yes
+
+Question:
+how are you
+Output:
+invalid
+
+Question:
+{question}
+Query text:
+{query_text or '<empty>'}
+Output:
+"""
     
     def _extract_tempoql_query(self, text: str) -> Optional[str]:
         """
@@ -280,12 +246,12 @@ Include only the steps that actually exist in the query.
             Extracted TempoQL query or None if not found
         """
         if not text:
-            return None
+            return None, text
         
         # Look for code blocks with tempoql language
         tempoql_match = re.search(r'```tempoql\n?([\s\S]*?)```', text)
         if tempoql_match:
-            return tempoql_match.group(1).strip()
+            return tempoql_match.group(1).strip(), re.sub(r'^' + re.escape(tempoql_match.group(0)) + r'[\r\n]+', '', text)
         
         # Fallback: look for any code block that might contain a query
         code_block_match = re.search(r'```(?:\w+)?\n?([\s\S]*?)```', text)
@@ -293,9 +259,9 @@ Include only the steps that actually exist in the query.
             code = code_block_match.group(1).strip()
             # Check if it looks like a TempoQL query (contains common TempoQL patterns)
             if '{' in code and any(keyword in code for keyword in ['every', 'before', 'after', 'at']):
-                return code
+                return code, re.sub(r'^' + re.escape(code_block_match.group(0)) + r'[\r\n]+', '', text)
         
-        return None
+        return None, text
     
     def _process_ai_response(self, response: str) -> Dict[str, Any]:
         """
@@ -307,14 +273,15 @@ Include only the steps that actually exist in the query.
         Returns:
             Dictionary with extracted_query, explanation, and has_query fields
         """
+        extracted, cleaned = self._extract_tempoql_query(response)
         return {
-            'extracted_query': self._extract_tempoql_query(response),
-            'explanation': response,
+            'extracted_query': extracted or '',
+            'explanation': cleaned,
             'has_query': True,
             'raw_response': response
         }
 
-    def _call_gemini_api(self, prompt: str, max_num_calls: int = 10) -> str:
+    def _call_gemini_api(self, prompt: str, max_num_calls: int = 10, fast_model: bool = False) -> str:
         """
         Call the Gemini API and return the response.
         
@@ -340,9 +307,9 @@ Include only the steps that actually exist in the query.
         while num_calls < max_num_calls:
             try:
                 response = self.genai_client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-flash",
                     contents=contents,
-                    config=self.config
+                    config=self.fast_config if fast_model else self.config
                 )
             except Exception as e:
                 traceback.print_exc()
@@ -383,6 +350,18 @@ Include only the steps that actually exist in the query.
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
         
+    def validate_question(self, question: str, existing_query: Optional[str]) -> bool:
+        prompt = self._make_query_validation_prompt(question, existing_query)
+        response = self._call_gemini_api(prompt, fast_model=True)
+        response = re.sub(r'[^A-Za-z]', '', response).lower()
+        if response not in ('yes', 'no', 'invalid'):
+            raise ValueError("Question validation failed - please try again.")
+        
+        if response == 'invalid':
+            raise ValueError("The question does not seem to involve TempoQL queries. I can only answer questions related to TempoQL.")
+        
+        return response == 'yes'
+        
     def process_question(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user question and return a processed AI response.
@@ -408,19 +387,14 @@ Include only the steps that actually exist in the query.
         try:
             # Process based on the mode
             if not explain:
-                # For generate mode, check if the question is asking for query generation
-                is_relevant = self._is_query_generation_request(question)
-                print(f"🔍 Question relevance check for generate mode: {is_relevant}")
-                print(f"🔍 Question: {question}")
-                if not is_relevant:
-                    return {
-                        'extracted_query': None,
-                        'explanation': "I can only help with generating TempoQL queries based on your data analysis needs or explaining existing TempoQL queries. Please ask me to create a query for analyzing your temporal data or to explain a TempoQL query you've written.",
-                        'has_query': False,
-                        'raw_response': "I can only help with generating TempoQL queries based on your data analysis needs or explaining existing TempoQL queries. Please ask me to create a query for analyzing your temporal data or to explain a TempoQL query you've written.",
-                        'error': False
-                    }
-                prompt = self._create_data_analysis_prompt(question, self.query_engine.dataset.get_table_context())
+                assert question is not None, "question must be provided to run generation"
+                needs_existing_query = self.validate_question(question, query)
+                print(f"🔍 Needs existing query for generate mode: {needs_existing_query}")
+                if needs_existing_query and not query:
+                    raise ValueError("Answering your question seems to require an existing TempoQL query, but you haven't written one yet. Please try again.")
+                prompt = self._create_data_analysis_prompt(question, 
+                                                           self.query_engine.dataset.get_table_context(), 
+                                                           existing_query=query if needs_existing_query else None)
             else:
                 # For explain mode, check if the question contains a TempoQL query to explain
                 assert query is not None, "query must be provided to run explanation"
@@ -429,6 +403,7 @@ Include only the steps that actually exist in the query.
             # Call Gemini API
             response = self._call_gemini_api(prompt)
             
+            print(response)
             # Process the response based on mode
             if explain:
                 # For explain mode, don't extract queries - just return the explanation
@@ -450,7 +425,7 @@ Include only the steps that actually exist in the query.
             traceback.print_exc()
             return {
                 'extracted_query': None,
-                'explanation': f"Error processing question: {str(e)}",
+                'explanation': str(e),
                 'has_query': False,
                 'raw_response': f"Error processing question: {str(e)}",
                 'error': True

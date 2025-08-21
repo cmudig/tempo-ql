@@ -6,6 +6,7 @@
   import { formatMessage } from '../utils/markdown_format';
   import Fa from 'svelte-fa';
   import { faBoltLightning } from '@fortawesome/free-solid-svg-icons';
+  import MarkdownOutput from './MarkdownOutput.svelte';
 
   export let textInput: string = '';
   export let onTextInput: (value: string) => void = () => {};
@@ -34,8 +35,6 @@
   export let aiAssistantRef: HTMLElement | undefined = undefined;
   export let aiInputValueOverride: string = '';
   export let historicalResponse: string = '';
-
-  let explanationExpanded: boolean = false;
 </script>
 
 <div class="flex {width} h-full">
@@ -93,7 +92,8 @@
     {/if}
     <div
       class="px-2 mb-4 {width} dark:text-slate-100"
-      class:opacity-50={!values || Object.keys(values).length == 0}
+      class:opacity-50={(!values || Object.keys(values).length == 0) &&
+        !queryError}
     >
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -107,29 +107,17 @@
           disabled={(!values || Object.keys(values).length == 0) && !queryError}
         >
           <Fa icon={faBoltLightning} class="inline mr-2" />
-          Explain
+          {#if !!queryError}Explain and Fix{:else}Explain{/if}
         </button>
       </div>
       {#if llmExplanation}
-        <div class="mb-4">
-          {#if llmExplanation.length > 250}
-            {@html formatMessage(
-              explanationExpanded
-                ? llmExplanation
-                : llmExplanation.slice(0, 250) + '...'
-            )}
-            <a
-              class="text-blue-600 dark:text-blue-400 hover:opacity-50 ml-2 text-sm"
-              on:click={() => (explanationExpanded = !explanationExpanded)}
-              href="#"
-            >
-              {explanationExpanded ? 'Less' : 'More'}
-            </a>
-          {:else}
-            {@html formatMessage(llmExplanation)}
-          {/if}
-        </div>
+        <MarkdownOutput text={llmExplanation} collapseLength={250} />
       {/if}
+    </div>
+    <div
+      class="px-2 mb-4 {width} dark:text-slate-100"
+      class:opacity-50={!values || Object.keys(values).length == 0}
+    >
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Query Result

@@ -9,6 +9,7 @@
   import { theme } from '../stores/theme';
   import Fa from 'svelte-fa';
   import { formatMessage } from '../utils/markdown_format';
+  import MarkdownOutput from './MarkdownOutput.svelte';
   export let onSubmit: (value: string) => void = () => {};
   export let isLoading: boolean = false;
   export let error: string = '';
@@ -114,7 +115,7 @@
         ? 'bg-slate-600 text-white dark:bg-slate-200 dark:text-slate-800'
         : 'dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800'}"
       on:click={() => (tab = 'response')}
-      disabled={!llmResponse}
+      disabled={!llmResponse && !error}
       type="button"
     >
       Response
@@ -173,24 +174,23 @@
     <div class="h-full {scrollable ? 'overflow-auto' : ''}">
       {#if isLoading}
         <!-- Loading State -->
-        <div
-          class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 dark:border-blue-400"
-        ></div>
         <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
-          AI is thinking...
+          <span
+            class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 dark:border-blue-400"
+          ></span>
+          &nbsp;AI is thinking...
         </h4>
       {:else if error}
         <!-- Error State -->
-        <div class="flex items-center flex-col justify-center">
-          <Fa icon={faWarning} class="text-lg" />
-          <h4 class="text-red-500 dark:text-red-400 font-medium text-sm">
+        <div
+          class="bg-red-50 dark:bg-red-800/40 rounded-lg border border-red-200 dark:border-red-400 p-4 mb-4"
+        >
+          <h3 class="text-lg font-medium text-red-700 dark:text-red-100 mb-2">
             Error
-          </h4>
-          <p
-            class="text-slate-700 dark:text-slate-300 text-sm font-mono text-center max-w-full"
-          >
+          </h3>
+          <div class="text-sm font-mono text-slate-800 dark:text-slate-100">
             {error}
-          </p>
+          </div>
         </div>
       {:else if historicalResponse}
         <div
@@ -202,11 +202,7 @@
           </h4>
         </div>
         <div class="flex-1 overflow-y-auto p-4 ai-scrollbar">
-          <div
-            class="text-slate-700 dark:text-slate-200 text-sm leading-relaxed prose prose-sm max-w-none font-mono"
-          >
-            {@html formatMessage(historicalResponse)}
-          </div>
+          <MarkdownOutput text={historicalResponse} />
         </div>
       {:else if llmResponse}
         <!-- Success State -->
@@ -214,7 +210,7 @@
           <div
             class="text-slate-700 dark:text-slate-200 text-sm leading-relaxed prose prose-sm max-w-none"
           >
-            {@html formatMessage(llmResponse)}
+            <MarkdownOutput text={llmResponse} />
           </div>
         </div>
       {/if}
@@ -263,14 +259,5 @@
 
   :global(.dark .ai-scrollbar) {
     scrollbar-color: #6b7280 #374151;
-  }
-
-  :global(.prose code) {
-    background-color: rgb(243 244 246);
-    padding: 0.125rem 0.25rem;
-    border-radius: 0.25rem;
-    font-size: 0.875rem;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas,
-      'Liberation Mono', Menlo, monospace;
   }
 </style>

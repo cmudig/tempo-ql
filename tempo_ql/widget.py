@@ -309,7 +309,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._set_loading(True, "Generating...")
             
             # Process AI question
-            response_data = self.ai_assistant.process_question(question=question)
+            response_data = self.ai_assistant.process_question(question=question, query=self.text_input.strip())
             
             if response_data.get('error', False):
                 self.llm_error = response_data.get('explanation', 'Unknown error')
@@ -319,13 +319,16 @@ class TempoQLWidget(anywidget.AnyWidget):
                 has_query = response_data.get('has_query', False)
                 
                 self._set_ai_success(explanation, extracted_query, has_query)
-                
+
         except Exception as e:
+            traceback.print_exc()
             self.llm_error = f"Error: {str(e)}"
             self._clear_ai_state()
         finally:
             self._set_loading(False)  # Clear loading state
             self.llm_trigger = ''
+            self.llm_loading = False
+
 
     @traitlets.observe('scope_analysis_trigger')
     def _on_scope_analysis_trigger(self, change):

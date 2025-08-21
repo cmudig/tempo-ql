@@ -6,7 +6,6 @@
     getAutocompleteOptions,
     performAutocomplete,
   } from '../utils/autocomplete';
-  import { theme } from '../stores/theme';
   import highlight from 'custom-syntax-highlighter';
   import {
     highlightPatterns,
