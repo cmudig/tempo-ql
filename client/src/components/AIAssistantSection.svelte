@@ -8,6 +8,7 @@
   } from '@fortawesome/free-solid-svg-icons';
   import { theme } from '../stores/theme';
   import Fa from 'svelte-fa';
+  import { formatMessage } from '../utils/markdown_format';
   export let onSubmit: (value: string) => void = () => {};
   export let isLoading: boolean = false;
   export let error: string = '';
@@ -48,26 +49,6 @@
       event.preventDefault();
       handleSubmit();
     }
-  }
-
-  // Function to format markdown-like text
-  function formatMessage(text: string): string {
-    if (!text) return '';
-
-    return (
-      text
-        // Convert **bold** to HTML
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        // Convert *italic* to HTML
-        .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        // Convert `code` to HTML
-        .replace(
-          /`(.*?)`/g,
-          '<code class="bg-slate-100 px-1 py-0.5 rounded text-sm font-mono">$1</code>'
-        )
-        // Convert line breaks to HTML
-        .replace(/\n/g, '<br>')
-    );
   }
 
   // Trigger query extraction when a query is available

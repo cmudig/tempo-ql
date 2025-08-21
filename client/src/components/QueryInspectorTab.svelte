@@ -3,6 +3,9 @@
   import QueryResultCard from './QueryResultCard.svelte';
   import SubquerySection from './SubquerySection.svelte';
   import AIAssistantSection from './AIAssistantSection.svelte';
+  import { formatMessage } from '../utils/markdown_format';
+  import Fa from 'svelte-fa';
+  import { faBoltLightning } from '@fortawesome/free-solid-svg-icons';
 
   export let textInput: string = '';
   export let onTextInput: (value: string) => void = () => {};
@@ -31,6 +34,8 @@
   export let aiAssistantRef: HTMLElement | undefined = undefined;
   export let aiInputValueOverride: string = '';
   export let historicalResponse: string = '';
+
+  let explanationExpanded: boolean = false;
 </script>
 
 <div class="flex {width} h-full">
@@ -87,9 +92,44 @@
       </div>
     {/if}
     <div
-      class="px-2 mb-4 border-0 rounded-none {width} transition-colors duration-200 w-full"
+      class="px-2 mb-4 {width} dark:text-slate-100"
       class:opacity-50={!values || Object.keys(values).length == 0}
     >
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          Explanation
+        </h3>
+        <button
+          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
+          on:click={() => {
+            onExplain();
+          }}
+          disabled={(!values || Object.keys(values).length == 0) && !queryError}
+        >
+          <Fa icon={faBoltLightning} class="inline mr-2" />
+          Explain
+        </button>
+      </div>
+      {#if llmExplanation}
+        <div class="mb-4">
+          {#if llmExplanation.length > 250}
+            {@html formatMessage(
+              explanationExpanded
+                ? llmExplanation
+                : llmExplanation.slice(0, 250) + '...'
+            )}
+            <a
+              class="text-blue-600 dark:text-blue-400 hover:opacity-50 ml-2 text-sm"
+              on:click={() => (explanationExpanded = !explanationExpanded)}
+              href="#"
+            >
+              {explanationExpanded ? 'Less' : 'More'}
+            </a>
+          {:else}
+            {@html formatMessage(llmExplanation)}
+          {/if}
+        </div>
+      {/if}
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
           Query Result

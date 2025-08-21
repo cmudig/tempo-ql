@@ -135,81 +135,56 @@ Instruction: <INSTRUCTION>
 
         return base_prompt
     
-    def _create_explain_prompt(self, question: str, table_context: str) -> str:
+    def _create_explain_prompt(self, query: str, query_error: Optional[str], table_context: str) -> str:
         """
         Create a prompt for explaining TempoQL queries.
         
         Args:
-            question: The user's question (should contain a TempoQL query to explain)
+            query: The query to explain
+            query_error: An error to explain along with the query
             
         Returns:
             Formatted prompt for explaining queries
         """
         with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
             base_prompt = file.read()
-        return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
-Given this information, I have written a TempoQL query below and I would like you to explain what it does. 
-You do not need to call any functions to produce your explanation.
-Be clear, concise and friendly but professional, and do not include praise.
-Include each of the following in your response if applicable:
-1. What data the query extracts from the dataset
-2. How the data is transformed
-3. Aggregation expressions used to structure the data
-
-Query: {question}
-"""
-
-    def _create_fix_prompt(self, failed_query: str, error_message: str, table_context: str) -> str:
-        """
-        Create a prompt for fixing failed TempoQL queries.
-        
-        Args:
-            failed_query: The query that failed to execute
-            error_message: The error message from the failed execution
-            table_context: Context about available data tables and structure
             
-        Returns:
-            Formatted prompt for fixing the query
-        """
-        with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
-            base_prompt = file.read()
+        if query_error:
+            question = f"Query: ```tempoql\n{query}\n```\n\nError: {query_error}"
+            return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
+Given this information, I have written a TempoQL query below which produced an error when I ran it. 
+The error will be provided below the query and I would like you to explain the error and attempt to fix the issue. If you can fix the issue, provide the code in a code block labeled tempoql, like so:
 
-        fix_instruction = f"""The user tried to execute this TempoQL query but it failed:
-
-**Failed Query:**
 ```tempoql
-{failed_query}
+tempo code goes here
 ```
 
-**Error Message:**
-{error_message}
+Make sure that the new query:
+- Fixes any syntax or logical errors
+- Uses correct data element references
+- Follows proper TempoQL structure
+- Is likely to execute successfully
 
-Please help fix this query by:
+Be clear, concise and friendly but professional, and do not include praise.
 
-1. **Analyzing the Error**: Explain what went wrong with the original query and why it failed.
+{question}
+"""
 
-2. **Providing a Fixed Query**: Generate a corrected TempoQL query that addresses the issues in the original query. Make sure the new query:
-   - Fixes the syntax or logical errors
-   - Uses correct data element references
-   - Follows proper TempoQL structure
-   - Is likely to execute successfully
+        else:
+            question = f"Query: ```tempoql\n{query}\n```"
+            return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
+Given this information, I have written a TempoQL query below and I would like you to explain what it does.
+Be clear, concise and friendly but professional, and do not include praise.
 
-3. **Explaining the Changes**: Clearly explain what changes you made and why they fix the problem.
+Provide a list of intuitive steps that the query follows to produce the response.
+Some steps might include:
+1. Data that the query extracts from the dataset
+2. Transformations to the data
+3. Aggregations used to structure the data
+Include only the steps that actually exist in the query.
 
-4. **How the New Query Works**: Explain what the corrected query does and what results it should produce.
-
-Please format your response with:
-- A clear explanation of the error
-- The fixed query in a ```tempoql code block
-- Detailed explanation of the changes made
-- Description of how the new query works"""
-
-        base_prompt = base_prompt.replace("<DATASET_INFO>", table_context)
-        base_prompt = base_prompt.replace("<INSTRUCTION>", fix_instruction)
-
-        return base_prompt
-
-
+{question}
+"""
     
     def _is_query_generation_request(self, question: str) -> bool:
         """
@@ -322,27 +297,6 @@ Please format your response with:
         
         return None
     
-    def _create_explanation_message(self, text: str) -> str:
-        """
-        Create explanation-only message (remove query code blocks).
-        
-        Args:
-            text: The full AI response text
-            
-        Returns:
-            Text with TempoQL code blocks removed
-        """
-        if not text:
-            return ''
-        
-        # Remove TempoQL code blocks but keep other content
-        explanation_text = re.sub(r'```tempoql\n?[\s\S]*?```', '', text)
-        
-        # Clean up extra whitespace
-        explanation_text = re.sub(r'\n\s*\n\s*\n', '\n\n', explanation_text).strip()
-        
-        return explanation_text
-    
     def _process_ai_response(self, response: str) -> Dict[str, Any]:
         """
         Process AI response to separate query and explanation.
@@ -353,23 +307,12 @@ Please format your response with:
         Returns:
             Dictionary with extracted_query, explanation, and has_query fields
         """
-        extracted_query = self._extract_tempoql_query(response)
-        
-        if extracted_query:
-            explanation = self._create_explanation_message(response)
-            return {
-                'extracted_query': extracted_query,
-                'explanation': explanation,
-                'has_query': True,
-                'raw_response': response
-            }
-        else:
-            return {
-                'extracted_query': None,
-                'explanation': response,
-                'has_query': False,
-                'raw_response': response
-            }
+        return {
+            'extracted_query': self._extract_tempoql_query(response),
+            'explanation': response,
+            'has_query': True,
+            'raw_response': response
+        }
 
     def _call_gemini_api(self, prompt: str, max_num_calls: int = 10) -> str:
         """
@@ -439,18 +382,16 @@ Please format your response with:
                 return response.text
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
-    
-
-    
-    def process_question(self, question: str, mode: str = "generate", failed_query: str = None, error_message: str = None) -> Dict[str, Any]:
+        
+    def process_question(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user question and return a processed AI response.
         
         Args:
             question: The user's question
-            mode: "generate" to create TempoQL queries, "explain" to explain existing queries, "fix" to fix failed queries
-            failed_query: The query that failed (only used in fix mode)
-            error_message: The error message from the failed query (only used in fix mode)
+            explain: Whether to explain the query or answer the question
+            query: A query to explain
+            query_error: An error 
             
         Returns:
             Dictionary with processed AI response including extracted query and explanation
@@ -466,7 +407,7 @@ Please format your response with:
         
         try:
             # Process based on the mode
-            if mode == "generate":
+            if not explain:
                 # For generate mode, check if the question is asking for query generation
                 is_relevant = self._is_query_generation_request(question)
                 print(f"🔍 Question relevance check for generate mode: {is_relevant}")
@@ -480,42 +421,16 @@ Please format your response with:
                         'error': False
                     }
                 prompt = self._create_data_analysis_prompt(question, self.query_engine.dataset.get_table_context())
-            elif mode == "explain":
-                # For explain mode, check if the question contains a TempoQL query to explain
-                has_query = self._contains_tempoql_query(question)
-                print(f"🔍 TempoQL query detection for explain mode: {has_query}")
-                print(f"🔍 Question: {question}")
-                if not has_query:
-                    return {
-                        'extracted_query': None,
-                        'explanation': "I can only explain TempoQL queries. Please provide a TempoQL query in your question for me to explain, or use the regular 'Ask' feature to generate a new query.",
-                        'has_query': False,
-                        'raw_response': "I can only explain TempoQL queries. Please provide a TempoQL query in your question for me to explain, or use the regular 'Ask' feature to generate a new query.",
-                        'error': False
-                    }
-                prompt = self._create_explain_prompt(question, self.query_engine.dataset.get_table_context())
-            elif mode == "fix":
-                # For fix mode, we need the failed query and error message
-                if not failed_query or not error_message:
-                    return {
-                        'extracted_query': None,
-                        'explanation': "Fix mode requires both a failed query and error message.",
-                        'has_query': False,
-                        'raw_response': "Fix mode requires both a failed query and error message.",
-                        'error': True
-                    }
-                print(f"🔍 Fix mode: Attempting to fix query: {failed_query}")
-                print(f"🔍 Error message: {error_message}")
-                prompt = self._create_fix_prompt(failed_query, error_message, self.query_engine.dataset.get_table_context())
             else:
-                # Default to generate if mode is unrecognized
-                prompt = self._create_data_analysis_prompt(question, self.query_engine.dataset.get_table_context())
+                # For explain mode, check if the question contains a TempoQL query to explain
+                assert query is not None, "query must be provided to run explanation"
+                prompt = self._create_explain_prompt(query, query_error, self.query_engine.dataset.get_table_context())
             
             # Call Gemini API
             response = self._call_gemini_api(prompt)
             
             # Process the response based on mode
-            if mode == "explain":
+            if explain:
                 # For explain mode, don't extract queries - just return the explanation
                 processed_response = {
                     'extracted_query': None,
@@ -524,14 +439,6 @@ Please format your response with:
                     'raw_response': response,
                     'error': False
                 }
-            elif mode == "fix":
-                # For fix mode, extract the fixed query and return both explanation and query
-                processed_response = self._process_ai_response(response)
-                processed_response['error'] = False
-                # Add additional context for fix mode
-                processed_response['mode'] = 'fix'
-                processed_response['original_query'] = failed_query
-                processed_response['original_error'] = error_message
             else:
                 # For generate mode, process normally to extract queries
                 processed_response = self._process_ai_response(response)

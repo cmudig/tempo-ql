@@ -22,6 +22,7 @@
     listNames,
     runQuery,
     handleLLMQuestion,
+    handleLLMExplanation,
     subqueries,
     queryError,
     scopes,
@@ -148,14 +149,6 @@
     console.log('text input', $textInput);
     if ($textInput.trim()) {
       runQuery($textInput);
-    }
-  }
-
-  function handleExplain() {
-    if ($textInput.trim()) {
-      console.log('🔍 Explain button clicked for query:', $textInput);
-      // Use the AI assistant in explain mode to explain the current query
-      handleLLMQuestion($textInput, 'explain');
     }
   }
 
@@ -313,7 +306,7 @@
         bind:textInput={$textInput}
         {dataFields}
         onRun={handleRun}
-        onExplain={handleExplain}
+        onExplain={handleLLMExplanation}
         queryError={$queryError}
         values={$values}
         subqueries={$subqueries}

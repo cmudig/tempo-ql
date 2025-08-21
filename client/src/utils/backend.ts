@@ -79,13 +79,14 @@ export function createBackendConnection(model: BackendModel) {
     },
 
     // LLM question handler
-    handleLLMQuestion: (question: string, mode: string = 'generate') => {
-      console.log('🤖 LLM Question submitted:', question, 'Mode:', mode);
-
-      // Set the question and mode in the dedicated traitlets and trigger LLM processing
+    handleLLMQuestion: (question: string) => {
       model.set('llm_question', question);
-      model.set('llm_mode', mode);
       model.set('llm_trigger', 'ask'); // Trigger LLM processing
+      model.save_changes();
+    },
+
+    handleLLMExplanation: () => {
+      model.set('llm_trigger', 'explain'); // Trigger LLM processing
       model.save_changes();
     },
 

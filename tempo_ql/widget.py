@@ -36,7 +36,6 @@ class TempoQLWidget(anywidget.AnyWidget):
     llm_available = traitlets.Bool(False).tag(sync=True)
     llm_trigger = traitlets.Unicode("").tag(sync=True)
     llm_question = traitlets.Unicode("").tag(sync=True)
-    llm_mode = traitlets.Unicode("generate").tag(sync=True)  # "generate" or "explain"
     llm_loading = traitlets.Bool(False).tag(sync=True)
     llm_error = traitlets.Unicode("").tag(sync=True)
     llm_response = traitlets.Unicode("").tag(sync=True) # for general AI outputs to be shown in the lower-left
@@ -46,6 +45,7 @@ class TempoQLWidget(anywidget.AnyWidget):
     api_status = traitlets.Unicode("Checking API connection...").tag(sync=True)
     
     # Data scope analysis
+    query_for_results = traitlets.Unicode("").tag(sync=True) # keeps track of which query produced the given results
     scopes = traitlets.List([]).tag(sync=True)
     scope_analysis_trigger = traitlets.Unicode("").tag(sync=True)
     scope_concepts = traitlets.Dict({}).tag(sync=True)
@@ -231,19 +231,30 @@ class TempoQLWidget(anywidget.AnyWidget):
         self._set_loading(False)
         return result
 
-    # ==== AI ASSISTANT METHODS ====
+    # ==== AI EXPLANATION ====
     
-    def _trigger_llm_explanation(self, query: str):
+    def run_llm_explanation(self):
         """Trigger AI explanation for a successful query."""
         if not (self.ai_assistant and self.ai_assistant.is_available()):
             print("⚠️ AI assistant not available for explanation")
             return
             
-        self._clear_ai_state()
-        self.llm_question = f"Please explain this TempoQL query: {query}"
-        self.llm_mode = "explain"
-        self.llm_trigger = "ask"
         print("🔍 AI explain mode triggered for successful query")
+        try:            
+            self._set_loading(True, "Explaining query...")
+            
+            # Process AI question
+            response_data = self.ai_assistant.process_question(explain=True, query=self.query_for_results, query_error=self.query_error)
+            
+            if response_data.get('error', False):
+                self.llm_explanation = response_data.get('explanation', 'An error occurred while explaining your query. Please try again.')
+            else:
+                self.llm_explanation = response_data.get('explanation', '')
+                
+        except Exception as e:
+            self.llm_explanation = f"An error occurred while explaining your query: {str(e)}"
+        finally:
+            self._set_loading(False)  # Clear loading state
 
     # ==== TRAITLET OBSERVERS ====
     
@@ -254,7 +265,9 @@ class TempoQLWidget(anywidget.AnyWidget):
             return
             
         query = self.text_input.strip()
+        self.query_for_results = query
         self.query_error = ""
+        self.llm_explanation = ""
         print(f"🔍 Processing query: {query}")
         
         try:
@@ -276,7 +289,12 @@ class TempoQLWidget(anywidget.AnyWidget):
         """Handle AI assistant trigger from frontend (Ask button)."""
         if not change['new']:
             return
-            
+        
+        if change['new'] == 'explain':
+            self.run_llm_explanation()
+            self.llm_trigger = ''
+            return
+        
         question = self.llm_question.strip()
         if not question:
             self._set_ai_error("No question provided")
@@ -288,16 +306,10 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._clear_ai_state()
             
             # Show appropriate loading message based on mode
-            mode = self.llm_mode or "generate"
-            if mode == "generate":
-                self._set_loading(True, "Generating query...")
-            elif mode == "explain":
-                self._set_loading(True, "Explaining query...")
-            else:
-                self._set_loading(True, "Processing request...")
+            self._set_loading(True, "Generating...")
             
             # Process AI question
-            response_data = self.ai_assistant.process_question(question, mode=mode)
+            response_data = self.ai_assistant.process_question(question=question)
             
             if response_data.get('error', False):
                 self.llm_error = response_data.get('explanation', 'Unknown error')
@@ -313,7 +325,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._clear_ai_state()
         finally:
             self._set_loading(False)  # Clear loading state
-            self._reset_llm_state()
+            self.llm_trigger = ''
 
     @traitlets.observe('scope_analysis_trigger')
     def _on_scope_analysis_trigger(self, change):
@@ -362,4 +374,3 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.llm_loading = False
         self.llm_trigger = ""
         self.llm_question = ""
-        self.llm_mode = "generate"
