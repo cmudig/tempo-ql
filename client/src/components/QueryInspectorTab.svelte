@@ -90,30 +90,33 @@
         </div>
       </div>
     {/if}
-    <div
-      class="px-2 mb-4 {width} dark:text-slate-100"
-      class:opacity-50={(!values || Object.keys(values).length == 0) &&
-        !queryError}
-    >
-      <div class="flex items-center justify-between mb-2">
-        <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
-          Explanation
-        </h3>
-        <button
-          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
-          on:click={() => {
-            onExplain();
-          }}
-          disabled={(!values || Object.keys(values).length == 0) && !queryError}
-        >
-          <Fa icon={faBoltLightning} class="inline mr-2" />
-          {#if !!queryError}Explain and Fix{:else}Explain{/if}
-        </button>
+    {#if llmAvailable}
+      <div
+        class="px-2 mb-4 {width} dark:text-slate-100"
+        class:opacity-50={(!values || Object.keys(values).length == 0) &&
+          !queryError}
+      >
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+            Explanation
+          </h3>
+          <button
+            class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
+            on:click={() => {
+              onExplain();
+            }}
+            disabled={(!values || Object.keys(values).length == 0) &&
+              !queryError}
+          >
+            <Fa icon={faBoltLightning} class="inline mr-2" />
+            {#if !!queryError}Explain and Fix{:else}Explain{/if}
+          </button>
+        </div>
+        {#if llmExplanation}
+          <MarkdownOutput text={llmExplanation} collapseLength={250} />
+        {/if}
       </div>
-      {#if llmExplanation}
-        <MarkdownOutput text={llmExplanation} collapseLength={250} />
-      {/if}
-    </div>
+    {/if}
     <div
       class="px-2 mb-4 {width} dark:text-slate-100"
       class:opacity-50={!values || Object.keys(values).length == 0}

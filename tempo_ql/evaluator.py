@@ -632,7 +632,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
 
     def function_call(self, tree):
         function_name = tree.children[0].value.lower()
-        operands = [self.visit(a) for a in tree.children[1:]]
+        operands = [self.visit(a) for a in tree.children[2:-1:2]]
         if function_name in ("time", "starttime", "endtime"):
             if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             if function_name == "time":
@@ -944,7 +944,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             return base.where(where, pd.NA)
         
     def with_clause(self, tree):
-        var_name = tree.children[1].value
+        var_name = tree.children[2].value
         var_value = self._parse_variable_value(tree.children[-1])
         if isinstance(var_value, Compilable): var_value = var_value.execute()
         

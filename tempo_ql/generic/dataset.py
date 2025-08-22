@@ -738,10 +738,10 @@ class GenericDataset:
                 )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
             ).cte('all_times')
             try:
-                increment = datetime.timedelta(seconds=1) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
-                stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + cast(increment, Interval)).label('maxtime')).group_by(all_times.c.id)
+                increment = cast(datetime.timedelta(seconds=1), Interval) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
+                stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + increment).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
-            except:
+            except Exception as e:
                 stmt = select(all_times.c.id, func.datetime_add(func.max(all_times.c.maxtime), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
