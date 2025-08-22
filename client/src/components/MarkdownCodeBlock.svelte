@@ -1,6 +1,6 @@
 <script lang="ts">
   import Fa from 'svelte-fa';
-  import { faCheck, faCopy } from '@fortawesome/free-solid-svg-icons';
+  import { faCheck, faCopy, faPlay } from '@fortawesome/free-solid-svg-icons';
   import highlight from 'custom-syntax-highlighter';
   import {
     highlightPatterns,
@@ -8,6 +8,7 @@
   } from '../utils/syntaxHighlight';
 
   export let content: string = '';
+  export let onRun: (code: string) => void = () => {};
 
   // Generate unique ID for highlighting
   let highlightedViewID: string =
@@ -46,16 +47,25 @@
 </script>
 
 <div
-  class="bg-slate-100 dark:bg-slate-800 rounded-md my-2 p-4 pr-8 relative text-slate-900 dark:text-slate-100"
+  class="bg-slate-100 dark:bg-slate-800 rounded-md my-2 p-4 pr-12 relative text-slate-900 dark:text-slate-100"
 >
-  <button
-    class="p-2 absolute right-0 top-0 mr-2 mt-2 hover:opacity-50 text-slate-700 dark:text-slate-200 text-sm"
-    title="Copy"
-    on:click={() => copyToClipboard(content)}
-  >
-    {#if copied}<Fa icon={faCheck} />{:else}
-      <Fa icon={faCopy} />{/if}
-  </button>
+  <div class="flex items-center absolute right-0 top-0 mr-2 mt-2">
+    <button
+      class="p-2 hover:opacity-50 text-slate-700 dark:text-slate-200 text-sm"
+      title="Copy"
+      on:click={() => copyToClipboard(content)}
+    >
+      {#if copied}<Fa icon={faCheck} />{:else}
+        <Fa icon={faCopy} />{/if}
+    </button>
+    <button
+      class="p-2 hover:opacity-50 text-slate-700 dark:text-slate-200 text-sm"
+      title="Run this query"
+      on:click={() => onRun(content)}
+    >
+      <Fa icon={faPlay} />
+    </button>
+  </div>
   <code
     class="font-mono whitespace-pre-line"
     id={highlightedViewID}

@@ -126,7 +126,7 @@
       let names = concepts
         .filter((c) => selectedConceptIDs.has(c.id))
         .map((c) => "'" + c.name + "'");
-      onInsert(scopeName, `name in (${names.join(', ')}'`);
+      onInsert(scopeName, `name in (${names.join(', ')})`);
     }}
   >
     <Fa icon={faPlus} class="inline mr-2" />

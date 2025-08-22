@@ -69,6 +69,10 @@
           {onHistoryClick}
           inputValueOverride={aiInputValueOverride}
           {historicalResponse}
+          onRun={(text) => {
+            textInput = text;
+            onRun();
+          }}
         />
       </div>
     {/if}
@@ -113,7 +117,14 @@
           </button>
         </div>
         {#if llmExplanation}
-          <MarkdownOutput text={llmExplanation} collapseLength={250} />
+          <MarkdownOutput
+            text={llmExplanation}
+            collapseLength={250}
+            onRun={(text) => {
+              textInput = text;
+              onRun();
+            }}
+          />
         {/if}
       </div>
     {/if}

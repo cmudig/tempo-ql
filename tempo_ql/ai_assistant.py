@@ -304,6 +304,7 @@ Output:
                 role="user", parts=[types.Part(text=prompt)]
             )
         ]
+        responses = []
         while num_calls < max_num_calls:
             try:
                 response = self.genai_client.models.generate_content(
@@ -315,9 +316,8 @@ Output:
                 traceback.print_exc()
                 raise Exception(f"Error calling Gemini API: {str(e)}")
             
-            print("Gemini response:", response.candidates[0].content)
-            if response.candidates[0].content.parts[0].function_call:
-                function_call = response.candidates[0].content.parts[0].function_call
+            if response.candidates[0].content.parts and any(p.function_call is not None for p in response.candidates[0].content.parts):
+                function_call = next(p.function_call for p in response.candidates[0].content.parts if p.function_call is not None)
                 if function_call.name == "search_concepts":
                     try:
                         args = function_call.args
@@ -341,12 +341,20 @@ Output:
                         )
                         contents.append(response.candidates[0].content)
                         contents.append(types.Content(role="user", parts=[function_response]))
+                        if response.text is not None:
+                            responses.append(response.text)
+                        responses.append('(Searching concepts...)')
 
                     except Exception as e:
                         traceback.print_exc()
                         raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
+                else:
+                    responses.append(response.text)
+                    return '\n\n'.join(responses)
             else:
-                return response.text
+                print("Plain text")
+                responses.append(response.text)
+                return '\n\n'.join(responses)
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
         

@@ -8,9 +8,10 @@
   } from '@fortawesome/free-solid-svg-icons';
   import { theme } from '../stores/theme';
   import Fa from 'svelte-fa';
-  import { formatMessage } from '../utils/markdown_format';
   import MarkdownOutput from './MarkdownOutput.svelte';
+
   export let onSubmit: (value: string) => void = () => {};
+  export let onRun: (code: string) => void = () => {};
   export let isLoading: boolean = false;
   export let error: string = '';
   export let llmResponse: string = '';
@@ -202,7 +203,7 @@
           </h4>
         </div>
         <div class="flex-1 overflow-y-auto p-4 ai-scrollbar">
-          <MarkdownOutput text={historicalResponse} />
+          <MarkdownOutput text={historicalResponse} {onRun} />
         </div>
       {:else if llmResponse}
         <!-- Success State -->
@@ -210,7 +211,7 @@
           <div
             class="text-slate-700 dark:text-slate-200 text-sm leading-relaxed prose prose-sm max-w-none"
           >
-            <MarkdownOutput text={llmResponse} />
+            <MarkdownOutput text={llmResponse} {onRun} />
           </div>
         </div>
       {/if}

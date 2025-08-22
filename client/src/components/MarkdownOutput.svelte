@@ -4,12 +4,18 @@
 
   export let text: string;
   export let collapseLength: number | null = null;
+  export let onRun: (code: string) => void = () => {};
 
   type Block = { type: 'text' | 'code'; content: string };
 
   let blocks: Block[] = [];
   $: collapsible = !!collapseLength && text.length > collapseLength;
-  let collapsed: boolean = true;
+  let collapsed: boolean = false;
+
+  $: {
+    text;
+    collapsed = false;
+  }
 
   // Simple markdown parser for code blocks and text
   function parseMarkdown(md: string): Block[] {
@@ -77,7 +83,7 @@
 
 {#each blocks as block, i}
   {#if block.type === 'code'}
-    <MarkdownCodeBlock content={block.content} />
+    <MarkdownCodeBlock content={block.content} {onRun} />
   {:else}
     <div class="leading-relaxed mb-2">
       {@html formatMarkdown(block.content)}
