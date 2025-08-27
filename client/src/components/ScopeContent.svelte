@@ -118,11 +118,11 @@
 
 <!-- Selected Scope Header -->
 <div class="pb-6 shrink-0 flex items-center justify-between gap-2">
-  <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 flex-auto">
+  <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100 flex-auto">
     {scopeName}
   </h2>
   <button
-    class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-200/50 disabled:dark:bg-slate-700/50 text-white disabled:text-slate-500/50"
+    class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-200/50 disabled:dark:bg-gray-700/50 text-white disabled:text-gray-500/50"
     disabled={selectedConceptIDs.size == 0}
     on:click={() => {
       if (queryByName) {
@@ -147,14 +147,14 @@
   <button
     on:click={() => (queryByName = !queryByName)}
     disabled={selectedConceptIDs.size == 0}
-    class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 disabled:opacity-50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white"
+    class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 disabled:opacity-50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
     title="Change whether to add to query by concept name or ID"
   >
     {#if queryByName}By Name{:else}By ID{/if}
   </button>
   <input
     type="search"
-    class="shrink-1 ml-4 px-3 py-1.5 rounded overflow-hidden focus:bg-white bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline focus:outline-blue-500 w-64 transition-colors duration-200"
+    class="shrink-1 ml-4 px-3 py-1.5 rounded overflow-hidden focus:bg-white bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline focus:outline-blue-500 w-64 transition-colors duration-200"
     placeholder="Filter concepts..."
     bind:value={search}
     autocomplete="off"
@@ -203,12 +203,10 @@
     <div
       class="flex flex-col w-full h-full items-center justify-center text-center gap-4"
     >
-      <div
-        class="w-1/2 text-slate-700 dark:text-slate-200 text-lg font-semibold"
-      >
+      <div class="w-1/2 text-gray-700 dark:text-gray-200 text-lg font-semibold">
         Data elements not retrieved yet
       </div>
-      <p class="text-slate-600 dark:text-slate-400 w-1/3">
+      <p class="text-gray-600 dark:text-gray-400 w-1/3">
         Click below to retrieve available data elements in this scope.
       </p>
       <button
@@ -279,7 +277,7 @@
     {/if}
     <!-- Fixed Header Section -->
     <div
-      class="bg-slate-50 dark:bg-slate-800 rounded-t-lg border border-slate-200 dark:border-slate-700"
+      class="bg-gray-50 dark:bg-gray-800 rounded-t-lg border border-gray-200 dark:border-gray-700"
     >
       <div
         class="grid gap-4 px-4 py-4 items-center"
@@ -289,23 +287,21 @@
         <div class="flex items-center justify-center">
           <input
             type="checkbox"
-            class="form-checkbox h-5 w-5 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
+            class="form-checkbox h-5 w-5 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
             checked={allFilteredSelected}
             indeterminate={someFilteredSelected}
             on:change={toggleSelectAllFiltered}
             aria-label="Select all concepts"
           />
         </div>
-        <div class="font-semibold text-slate-900 dark:text-slate-100">
+        <div class="font-semibold text-gray-900 dark:text-gray-100">
           Data Element
         </div>
-        <div class="font-semibold text-slate-900 dark:text-slate-100">Type</div>
-        <div class="font-semibold text-slate-900 dark:text-slate-100">
+        <div class="font-semibold text-gray-900 dark:text-gray-100">Type</div>
+        <div class="font-semibold text-gray-900 dark:text-gray-100">
           Count
           {#if totalCount > 0}
-            <span
-              class="text-sm font-normal text-slate-600 dark:text-slate-400"
-            >
+            <span class="text-sm font-normal text-gray-600 dark:text-gray-400">
               (Total: {totalCount.toLocaleString()})
             </span>
           {/if}
@@ -315,12 +311,12 @@
 
     <!-- Scrollable Table Body -->
     <div
-      class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-b-lg overflow-y-auto custom-scrollbar min-h-0 flex-auto"
+      class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-b-lg overflow-y-auto custom-scrollbar min-h-0 flex-auto"
     >
       {#if paginatedConcepts.length > 0}
         {#each paginatedConcepts as concept, index}
           <Hoverable
-            class="grid gap-4 px-4 py-4 border-b border-slate-100 dark:border-slate-800 last:border-b-0 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors duration-150 items-center"
+            class="grid gap-4 px-4 py-4 border-b border-gray-100 dark:border-gray-800 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-150 items-center"
             style="grid-template-columns: 2rem 2fr 1fr 2fr;"
             let:hovering
           >
@@ -328,29 +324,29 @@
             <div class="flex items-center justify-center">
               <input
                 type="checkbox"
-                class="form-checkbox h-5 w-5 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
+                class="form-checkbox h-5 w-5 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500"
                 checked={selectedConceptIDs.has(concept.id)}
                 on:change={() => toggleSelectConcept(concept.id)}
                 aria-label="Select concept"
               />
             </div>
             <div
-              class="text-slate-900 dark:text-slate-100 font-medium truncate"
+              class="text-gray-900 dark:text-gray-100 font-medium truncate"
               title={concept.name}
             >
               {#if concept.id != concept.name}<span
-                  class="font-mono text-slate-500 dark:text-slate-400"
+                  class="font-mono text-gray-500 dark:text-gray-400"
                   >{concept.id}&nbsp;</span
                 >{/if}{concept.name}
             </div>
-            <div class="text-slate-600 dark:text-slate-400">
+            <div class="text-gray-600 dark:text-gray-400">
               <span
                 class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {concept.type ===
                 'event'
                   ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
                   : concept.type === 'interval'
                     ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                    : 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200'}"
+                    : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}"
               >
                 {concept.type}
               </span>
@@ -370,9 +366,7 @@
                     />
                   </div>
                 {/if}
-                <div
-                  class="text-slate-600 dark:text-slate-200 font-mono text-sm"
-                >
+                <div class="text-gray-600 dark:text-gray-200 font-mono text-sm">
                   {concept.count.toLocaleString()}<span class="opacity-80">
                     &nbsp;/&nbsp;{totalCount.toLocaleString()}</span
                   >
@@ -395,7 +389,7 @@
           </Hoverable>
         {/each}
       {:else}
-        <div class="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
+        <div class="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
           No concepts found for this scope.
         </div>
       {/if}
@@ -403,7 +397,7 @@
     {#if sortedConcepts.length > CONCEPTS_PER_PAGE}
       <!-- Pagination Control -->
       <div
-        class="shrink-0 flex justify-end items-center px-6 py-2 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200"
+        class="shrink-0 flex justify-end items-center px-6 py-2 bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200"
       >
         <button
           class="p-2 hover:opacity-50 disabled:opacity-30 disabled:cursor-not-allowed"

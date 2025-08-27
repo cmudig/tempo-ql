@@ -135,7 +135,7 @@
 </script>
 
 <main
-  class="w-full bg-white dark:bg-slate-950 transition-colors duration-200 relative overflow-hidden flex flex-col"
+  class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex flex-col"
   style="height: 600px;"
 >
   <!-- Tab Bar -->

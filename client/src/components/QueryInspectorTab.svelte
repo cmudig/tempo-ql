@@ -77,7 +77,7 @@
 
   <!-- Right side: Query Output, Query Result Card and Subquery Section -->
   <div
-    class="flex-auto p-4 border-l border-slate-400 dark:border-slate-600 h-full overflow-auto"
+    class="flex-auto p-4 border-l border-gray-400 dark:border-gray-600 h-full overflow-auto"
   >
     {#if !!queryError}
       <div
@@ -86,19 +86,19 @@
         <h3 class="text-lg font-medium text-red-700 dark:text-red-100 mb-2">
           Query Error
         </h3>
-        <div class="text-sm font-mono text-slate-800 dark:text-slate-100">
+        <div class="text-sm font-mono text-gray-800 dark:text-gray-100">
           {queryError}
         </div>
       </div>
     {/if}
     {#if llmAvailable}
       <div
-        class="px-2 mb-4 {width} dark:text-slate-100"
+        class="px-2 mb-4 {width} dark:text-gray-100"
         class:opacity-50={(!values || Object.keys(values).length == 0) &&
           !queryError}
       >
         <div class="flex items-center justify-between mb-2">
-          <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
             Explanation
           </h3>
           <button
@@ -126,11 +126,11 @@
       </div>
     {/if}
     <div
-      class="px-2 mb-4 {width} dark:text-slate-100"
+      class="px-2 mb-4 {width} dark:text-gray-100"
       class:opacity-50={!values || Object.keys(values).length == 0}
     >
       <div class="flex items-center justify-between mb-2">
-        <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
           Query Result
         </h3>
       </div>
@@ -138,7 +138,7 @@
         <QueryResultCard {values} />
       {:else}
         <!-- Empty state -->
-        <div class="text-center py-8 text-slate-900 dark:text-slate-100">
+        <div class="text-center py-8 text-gray-900 dark:text-gray-100">
           No query results
         </div>
       {/if}

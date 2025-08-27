@@ -47,11 +47,11 @@
 </script>
 
 <div
-  class="bg-slate-100 dark:bg-slate-800 rounded-md my-2 p-4 pr-12 relative text-slate-900 dark:text-slate-100"
+  class="bg-gray-100 dark:bg-gray-800 rounded-md my-2 p-4 pr-12 relative text-gray-900 dark:text-gray-100"
 >
   <div class="flex items-center absolute right-0 top-0 mr-2 mt-2">
     <button
-      class="p-2 hover:opacity-50 text-slate-700 dark:text-slate-200 text-sm"
+      class="p-2 hover:opacity-50 text-gray-700 dark:text-gray-200 text-sm"
       title="Copy"
       on:click={() => copyToClipboard(content)}
     >
@@ -59,7 +59,7 @@
         <Fa icon={faCopy} />{/if}
     </button>
     <button
-      class="p-2 hover:opacity-50 text-slate-700 dark:text-slate-200 text-sm"
+      class="p-2 hover:opacity-50 text-gray-700 dark:text-gray-200 text-sm"
       title="Run this query"
       on:click={() => onRun(content)}
     >

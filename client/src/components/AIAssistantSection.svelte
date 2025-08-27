@@ -90,14 +90,14 @@
 <div class="px-4 pb-4 {width} h-full flex flex-col">
   <!-- Header with API Status -->
   <div class="flex items-center mb-4 gap-2 shrink-0">
-    <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 pr-2">
+    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 pr-2">
       AI Assistant
     </h3>
     <button
       class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 {tab ===
       'query'
-        ? 'bg-slate-600 text-white dark:bg-slate-200 dark:text-slate-800'
-        : 'dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800'}"
+        ? 'bg-gray-600 text-white dark:bg-gray-200 dark:text-gray-800'
+        : 'dark:text-white bg-transparent hover:bg-gray-100 dark:hover:bg-gray-800'}"
       on:click={() => (tab = 'query')}
       type="button"
     >
@@ -106,8 +106,8 @@
     <button
       class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 disabled:opacity-50 {tab ===
       'response'
-        ? 'bg-slate-600 text-white dark:bg-slate-200 dark:text-slate-800'
-        : 'dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800'}"
+        ? 'bg-gray-600 text-white dark:bg-gray-200 dark:text-gray-800'
+        : 'dark:text-white bg-transparent hover:bg-gray-100 dark:hover:bg-gray-800'}"
       on:click={() => (tab = 'response')}
       disabled={!llmResponse && !error}
       type="button"
@@ -116,7 +116,7 @@
     </button>
     <div class="flex-auto" />
     <div
-      class="flex items-center px-3 py-1 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300"
+      class="flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300"
     >
       <Fa icon={apiStatusInfo.icon} class="inline mr-2" />
       {apiStatus}
@@ -131,7 +131,7 @@
         bind:this={inputElement}
         bind:value={question}
         on:keydown={handleKeydown}
-        class="w-full h-full p-4 pb-16 bg-transparent text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+        class="w-full h-full p-4 pb-16 bg-transparent text-sm bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[120px] relative z-20"
         placeholder="Ask me to generate, update, or explain a TempoQL query..."
         disabled={isLoading}
         rows="5"
@@ -142,7 +142,7 @@
       >
         <button
           on:click={onHistoryClick}
-          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white"
+          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
           title="View query history"
         >
           <Fa icon={faClock} class="inline mr-2" />
@@ -182,7 +182,7 @@
           <h3 class="text-lg font-medium text-red-700 dark:text-red-100 mb-2">
             Error
           </h3>
-          <div class="text-sm font-mono text-slate-800 dark:text-slate-100">
+          <div class="text-sm font-mono text-gray-800 dark:text-gray-100">
             {error}
           </div>
         </div>
@@ -190,7 +190,7 @@
         <!-- Success State -->
         <div class="flex-1 overflow-y-auto ai-scrollbar">
           <div
-            class="text-slate-700 dark:text-slate-200 text-sm leading-relaxed prose prose-sm max-w-none"
+            class="text-gray-700 dark:text-gray-200 text-sm leading-relaxed prose prose-sm max-w-none"
           >
             <MarkdownOutput text={llmResponse} {onRun} />
           </div>

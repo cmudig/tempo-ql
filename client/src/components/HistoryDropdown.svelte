@@ -54,16 +54,16 @@
     class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-50 pointer-events-none"
   >
     <div
-      class="bg-white dark:bg-slate-800 border-2 border-slate-300/50 dark:border-slate-600/2 rounded-lg w-2/3 h-2/3 overflow-auto pointer-events-auto"
+      class="bg-white dark:bg-gray-800 border-2 border-gray-300/50 dark:border-gray-600/2 rounded-lg w-2/3 h-2/3 overflow-auto pointer-events-auto"
     >
       <!-- Header -->
       <div
-        class="flex items-center justify-between px-4 py-2 bg-slate-200 dark:bg-slate-700 dark:text-white"
+        class="flex items-center justify-between px-4 py-2 bg-gray-200 dark:bg-gray-700 dark:text-white"
       >
-        <h3 class="font-medium text-slate-900">Query History</h3>
+        <h3 class="font-medium text-gray-900">Query History</h3>
         <button
           on:click={onClose}
-          class="text-slate-600 dark:text-slate-300 hover:opacity-50 transition-colors p-2"
+          class="text-gray-600 dark:text-gray-300 hover:opacity-50 transition-colors p-2"
           title="Close history"
         >
           <Fa icon={faXmark} />
@@ -73,20 +73,18 @@
       <!-- History List -->
       <div class="max-h-80 overflow-y-auto">
         {#if history.length === 0}
-          <div
-            class="p-4 text-center text-slate-500 dark:text-slate-400 text-sm"
-          >
+          <div class="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
             No query history yet
           </div>
         {:else}
           {#each history as historyItem, index}
             <div
-              class="p-4 border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer transition-colors"
+              class="p-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors"
               on:click={() => onSelect(historyItem)}
             >
               <div class="flex items-start justify-between">
                 <h4
-                  class="text-sm font-medium text-slate-900 dark:text-slate-100 line-clamp-2 flex-1"
+                  class="text-sm font-medium text-gray-900 dark:text-gray-100 line-clamp-2 flex-1"
                 >
                   {#if historyItem.question}
                     {historyItem.question}
@@ -97,14 +95,14 @@
                   {/if}
                 </h4>
                 <span
-                  class="text-xs text-slate-500 dark:text-slate-400 ml-2 flex-shrink-0"
+                  class="text-xs text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0"
                 >
                   {formatTimestamp(historyItem.timestamp)}
                 </span>
               </div>
               {#if historyItem.answer}
                 <p
-                  class="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 mt-2"
+                  class="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 mt-2"
                 >
                   {historyItem.answer}
                 </p>

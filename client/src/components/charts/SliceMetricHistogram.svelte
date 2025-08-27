@@ -93,7 +93,7 @@
   </div>
   <div
     class:mt-1={!horizontalLayout}
-    class="text-xs text-slate-800 dark:text-slate-200 truncate"
+    class="text-xs text-gray-800 dark:text-gray-200 truncate"
   >
     {#if !$$slots.caption}
       {#if hoveredBin != null}
@@ -145,7 +145,7 @@
     </div>
     <div
       class:mt-1={!horizontalLayout}
-      class="text-xs text-slate-800 dark:text-slate-200 truncate"
+      class="text-xs text-gray-800 dark:text-gray-200 truncate"
     >
       {#if !$$slots.caption}
         {#if hoveredBin != null}

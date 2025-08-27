@@ -376,7 +376,7 @@
 
 <div class="flex flex-col w-full h-full p-4 mb-2">
   <div class="flex items-center mb-4 gap-2 shrink-0">
-    <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 pr-2">
+    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 pr-2">
       TempoQL Query
     </h3>
   </div>
@@ -386,7 +386,7 @@
     <textarea
       id="text-input"
       bind:this={textarea}
-      class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+      class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[120px] relative z-20"
       placeholder="// Write your Tempo-QL query here... (Ctrl+Z to undo, Ctrl+Y to redo)"
       bind:value
       on:input={handleInput}
@@ -397,7 +397,7 @@
 
     <!-- Syntax Highlighting Overlay -->
     <div
-      class="absolute top-0 left-0 w-full h-full p-4 pb-16 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words text-slate-900 dark:text-slate-100"
+      class="absolute top-0 left-0 w-full h-full p-4 pb-16 font-mono text-sm pointer-events-none bg-transparent z-10 text-wrap whitespace-pre-wrap break-words text-gray-900 dark:text-gray-100"
       id={highlightedViewID}
       bind:this={highlightedView}
     ></div>
@@ -406,14 +406,14 @@
     {#if showAutocomplete && autocompleteOptions.length > 0}
       <div
         bind:this={autocompleteContainer}
-        class="absolute z-30 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-md shadow-xl max-h-48 overflow-y-auto"
+        class="absolute z-30 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-xl max-h-48 overflow-y-auto"
       >
         {#each autocompleteOptions as option, index}
           <div
-            class="px-4 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors {index ===
+            class="px-4 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors {index ===
             selectedIndex
               ? 'bg-blue-600 text-white'
-              : 'text-slate-700 dark:text-slate-200'}"
+              : 'text-gray-700 dark:text-gray-200'}"
             role="button"
             tabindex="0"
             on:click={() => selectAutocompleteOption(option)}
@@ -428,7 +428,7 @@
             <div class="flex items-center justify-between">
               <span class="font-mono text-sm">{option.value}</span>
               <span
-                class="text-xs px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                class="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
               >
                 {option.type === 'data_item' ? 'field' : 'const'}
               </span>
@@ -443,7 +443,7 @@
     >
       <!-- Explain Button -->
       <!-- <button
-      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600"
+      class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600"
       on:click={onExplain}
       disabled={!value.trim()}
       class:opacity-50={!value.trim()}
@@ -453,7 +453,7 @@
     </button> -->
       <button
         on:click={onHistoryClick}
-        class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white"
+        class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
         title="View query history"
       >
         <Fa icon={faClock} class="inline mr-2" />

@@ -21,7 +21,7 @@
 
 <button
   on:click={toggleTheme}
-  class="px-3 py-2 rounded-md bg-slate-200 hover:bg-slate-200/50 dark:bg-slate-700 dark:hover:bg-slate-600 transition-colors duration-200"
+  class="px-3 py-2 rounded-md bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors duration-200"
   title="Toggle theme"
 >
   {#if $theme === 'dark'}

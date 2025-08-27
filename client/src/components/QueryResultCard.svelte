@@ -32,7 +32,7 @@
 </script>
 
 {#if values && values.values}
-  <div class="text-sm text-slate-700 dark:text-slate-300 mb-4">
+  <div class="text-sm text-gray-700 dark:text-gray-300 mb-4">
     <span class="font-semibold">Type:</span>
     <span class="font-mono">{values.type || 'unknown'}</span>
   </div>
@@ -41,7 +41,7 @@
   <div class="space-y-2">
     <!-- Count row with dropdown -->
     <div
-      class="flex flex-col bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-base w-full rounded-md overflow-hidden"
+      class="flex flex-col bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-base w-full rounded-md overflow-hidden"
     >
       <button
         class="flex items-center text-sm hover:opacity-50 gap-2 px-4 py-2"
@@ -50,23 +50,21 @@
       >
         <Fa
           icon={showCountDetails ? faChevronDown : faChevronRight}
-          class="text-slate-500 dark:text-slate-300"
+          class="text-gray-500 dark:text-gray-300"
         />
         <div>
-          <span class="font-bold text-slate-900 dark:text-slate-100"
-            >Count:</span
-          >
-          <span class="tabular-nums text-slate-700 dark:text-slate-200"
+          <span class="font-bold text-gray-900 dark:text-gray-100">Count:</span>
+          <span class="tabular-nums text-gray-700 dark:text-gray-200"
             >{formatNumber(values.values.length ?? 0)}</span
           >
-          <span class="text-slate-500 dark:text-slate-400">rows</span>
+          <span class="text-gray-500 dark:text-gray-400">rows</span>
         </div>
       </button>
       {#if showCountDetails}
         <div class="mx-2 px-2 py-2">
           {#if values.ids}
             <div
-              class="mb-1 font-semibold text-sm text-slate-800 dark:text-slate-200"
+              class="mb-1 font-semibold text-sm text-gray-800 dark:text-gray-200"
             >
               Trajectories
             </div>
@@ -74,7 +72,7 @@
               <MetricChartView values={values.ids.count} />
             </div>
             <div
-              class="mb-1 font-semibold text-sm text-slate-800 dark:text-slate-200"
+              class="mb-1 font-semibold text-sm text-gray-800 dark:text-gray-200"
             >
               Timesteps per Trajectory
             </div>
@@ -88,7 +86,7 @@
     <!-- Missingness row with dropdown -->
     {#if (values.missingness.rate.count ?? 0) > 0}
       <div
-        class="flex flex-col bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-base w-full rounded-md overflow-hidden"
+        class="flex flex-col bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-base w-full rounded-md overflow-hidden"
       >
         <button
           class="flex items-center text-sm hover:opacity-50 gap-2 px-4 py-2"
@@ -97,26 +95,26 @@
         >
           <Fa
             icon={showMissingnessDetails ? faChevronDown : faChevronRight}
-            class="text-slate-500 dark:text-slate-300"
+            class="text-gray-500 dark:text-gray-300"
           />
           <div>
-            <span class="font-bold text-slate-900 dark:text-slate-100"
+            <span class="font-bold text-gray-900 dark:text-gray-100"
               >Missingness:</span
             >
-            <span class="tabular-nums text-slate-700 dark:text-slate-200"
+            <span class="tabular-nums text-gray-700 dark:text-gray-200"
               >{formatPercent(
                 (values.missingness.rate.count ?? 0) /
                   (values.missingness.rate.total ?? 1)
               )}</span
             >
-            <span class="text-slate-500 dark:text-slate-400"> of rows</span>
+            <span class="text-gray-500 dark:text-gray-400"> of rows</span>
           </div>
         </button>
         {#if showMissingnessDetails}
           <div class="mx-2 px-2 py-2">
             {#if values.missingness}
               <div
-                class="mb-1 font-semibold text-sm text-slate-800 dark:text-slate-200"
+                class="mb-1 font-semibold text-sm text-gray-800 dark:text-gray-200"
               >
                 Number of Missing Values
               </div>
@@ -124,7 +122,7 @@
                 <MetricChartView values={values.missingness.rate} />
               </div>
               <div
-                class="mb-1 font-semibold text-sm text-slate-800 dark:text-slate-200"
+                class="mb-1 font-semibold text-sm text-gray-800 dark:text-gray-200"
               >
                 Missingness Rate per Trajectory
               </div>
@@ -140,7 +138,7 @@
     {/if}
     {#if values.types}
       <div
-        class="flex flex-col bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-base w-full rounded-md"
+        class="flex flex-col bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-base w-full rounded-md"
       >
         <button
           class="flex items-center text-sm hover:opacity-50 gap-2 px-4 py-2"
@@ -149,16 +147,16 @@
         >
           <Fa
             icon={showTypeDetails ? faChevronDown : faChevronRight}
-            class="text-slate-500 dark:text-slate-300"
+            class="text-gray-500 dark:text-gray-300"
           />
           <div>
-            <span class="font-bold text-slate-900 dark:text-slate-100"
+            <span class="font-bold text-gray-900 dark:text-gray-100"
               >Data Elements:</span
             >
-            <span class="tabular-nums text-slate-700 dark:text-slate-200">
+            <span class="tabular-nums text-gray-700 dark:text-gray-200">
               {formatNumber(Object.keys(values.types.counts).length ?? 0)}
             </span>
-            <span class="text-slate-500 dark:text-slate-400">
+            <span class="text-gray-500 dark:text-gray-400">
               distinct elements</span
             >
           </div>
@@ -172,11 +170,9 @@
     {/if}
     <!-- Values row with histogram -->
     <div
-      class="flex flex-col bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 px-4 py-2 text-base w-full rounded-md"
+      class="flex flex-col bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 px-4 py-2 text-base w-full rounded-md"
     >
-      <div
-        class="mb-2 text-sm font-bold text-slate-900 dark:text-slate-100 mr-2"
-      >
+      <div class="mb-2 text-sm font-bold text-gray-900 dark:text-gray-100 mr-2">
         Values:
       </div>
       <MetricChartView values={values.values} />

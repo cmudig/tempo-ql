@@ -74,7 +74,7 @@
     {/if}
   </div>
   {#if showTooltip}
-    <div class="text-xs text-slate-800 dark:text-slate-200">
+    <div class="text-xs text-gray-800 dark:text-gray-200">
       {#if !$$slots.caption}
         {format('.3')(value)}
       {:else}

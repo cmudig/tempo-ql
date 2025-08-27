@@ -35,7 +35,7 @@
     <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
       Subqueries
     </h3>
-    <div class="p-2 text-slate-800 dark:text-slate-200">
+    <div class="p-2 text-gray-800 dark:text-gray-200">
       <Fa icon={enabled ? faChevronUp : faChevronDown} class="inline" />
     </div>
   </button>
@@ -48,7 +48,7 @@
           <SubqueryItem {queryText} data={subqueryData} />
         {/each}
       {:else}
-        <div class="text-center py-8 text-slate-900 dark:text-slate-100">
+        <div class="text-center py-8 text-gray-900 dark:text-gray-100">
           No subqueries yet
         </div>
       {/if}
