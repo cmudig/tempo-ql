@@ -23,22 +23,15 @@
 
   export let onQueryExtracted: () => void = () => {};
   export let onHistoryClick: () => void = () => {};
-  export let inputValueOverride: string = '';
-  export let historicalResponse: string = '';
 
   let tab: 'query' | 'response' = 'query';
 
-  let inputValue = '';
+  export let question: string = '';
   let inputElement: HTMLTextAreaElement;
 
-  // Handle external input value override (for history selection)
-  $: if (inputValueOverride && inputValueOverride !== inputValue) {
-    inputValue = inputValueOverride;
-  }
-
   function handleSubmit() {
-    if (inputValue.trim()) {
-      onSubmit(inputValue.trim());
+    if (question.trim()) {
+      onSubmit(question.trim());
       // Keep the question in the input box instead of clearing it
       if (inputElement) {
         inputElement.focus();
@@ -136,7 +129,7 @@
       <!-- Large Textarea Input like main query input -->
       <textarea
         bind:this={inputElement}
-        bind:value={inputValue}
+        bind:value={question}
         on:keydown={handleKeydown}
         class="w-full h-full p-4 pb-16 bg-transparent text-sm bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-slate-500 dark:placeholder-slate-400 resize-none overflow-hidden min-h-[120px] relative z-20"
         placeholder="Ask me to generate, update, or explain a TempoQL query..."
@@ -163,7 +156,7 @@
             handleSubmit();
             tab = 'response';
           }}
-          disabled={!inputValue.trim() || isLoading}
+          disabled={!question.trim() || isLoading}
         >
           <Fa icon={faBoltLightning} class="inline mr-2" />
           Ask AI
@@ -192,18 +185,6 @@
           <div class="text-sm font-mono text-slate-800 dark:text-slate-100">
             {error}
           </div>
-        </div>
-      {:else if historicalResponse}
-        <div
-          class="flex items-center space-x-3 p-4 border-b border-slate-300 dark:border-slate-600 flex-shrink-0"
-        >
-          <span class="text-purple-600 dark:text-purple-400 text-lg">📚</span>
-          <h4 class="text-purple-600 dark:text-purple-400 font-medium text-sm">
-            Historical Response
-          </h4>
-        </div>
-        <div class="flex-1 overflow-y-auto p-4 ai-scrollbar">
-          <MarkdownOutput text={historicalResponse} {onRun} />
         </div>
       {:else if llmResponse}
         <!-- Success State -->

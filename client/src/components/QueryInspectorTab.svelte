@@ -32,9 +32,7 @@
 
   export let onHistoryClick: () => void = () => {};
   export let onQueryHistoryClick: () => void = () => {};
-  export let aiAssistantRef: HTMLElement | undefined = undefined;
-  export let aiInputValueOverride: string = '';
-  export let historicalResponse: string = '';
+  export let aiQuestion: string = '';
 </script>
 
 <div class="flex {width} h-full">
@@ -54,7 +52,7 @@
 
     {#if llmAvailable}
       <!-- AI Assistant Section with scrollable area -->
-      <div class="w-full h-1/2 overflow-hidden" bind:this={aiAssistantRef}>
+      <div class="w-full h-1/2 overflow-hidden">
         <AIAssistantSection
           onSubmit={onLLMSubmit}
           {llmResponse}
@@ -67,8 +65,7 @@
           {hasExtractedQuery}
           {onQueryExtracted}
           {onHistoryClick}
-          inputValueOverride={aiInputValueOverride}
-          {historicalResponse}
+          bind:question={aiQuestion}
           onRun={(text) => {
             textInput = text;
             onRun();

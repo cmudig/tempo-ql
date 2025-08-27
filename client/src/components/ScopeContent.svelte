@@ -6,6 +6,7 @@
     faChevronRight,
     faPlus,
     faSearch,
+    faWrench,
   } from '@fortawesome/free-solid-svg-icons';
   import Hoverable from '../utils/Hoverable.svelte';
 
@@ -22,6 +23,7 @@
     count: number;
   }> = [];
   export let scopeConcepts: any = {};
+  export let queryByName: boolean = false;
 
   let search = '';
 
@@ -115,7 +117,7 @@
 </script>
 
 <!-- Selected Scope Header -->
-<div class="pb-6 shrink-0 flex items-center justify-between">
+<div class="pb-6 shrink-0 flex items-center justify-between gap-2">
   <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 flex-auto">
     {scopeName}
   </h2>
@@ -123,10 +125,17 @@
     class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-200/50 disabled:dark:bg-slate-700/50 text-white disabled:text-slate-500/50"
     disabled={selectedConceptIDs.size == 0}
     on:click={() => {
-      let names = concepts
-        .filter((c) => selectedConceptIDs.has(c.id))
-        .map((c) => "'" + c.name + "'");
-      onInsert(scopeName, `name in (${names.join(', ')})`);
+      if (queryByName) {
+        let names = concepts
+          .filter((c) => selectedConceptIDs.has(c.id))
+          .map((c) => "'" + c.name + "'");
+        onInsert(scopeName, `name in (${names.join(', ')})`);
+      } else {
+        let ids = concepts
+          .filter((c) => selectedConceptIDs.has(c.id))
+          .map((c) => `${c.id}`);
+        onInsert(scopeName, `id in (${ids.join(', ')})`);
+      }
     }}
   >
     <Fa icon={faPlus} class="inline mr-2" />
@@ -134,6 +143,14 @@
       1
         ? 's'
         : ''}{/if}
+  </button>
+  <button
+    on:click={() => (queryByName = !queryByName)}
+    disabled={selectedConceptIDs.size == 0}
+    class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-slate-200 hover:bg-slate-200/50 disabled:opacity-50 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white"
+    title="Change whether to add to query by concept name or ID"
+  >
+    {#if queryByName}By Name{:else}By ID{/if}
   </button>
   <input
     type="search"
@@ -365,7 +382,7 @@
                 <button
                   class="px-3 py-0.5 text-sm font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white"
                   on:click={() => {
-                    if (!concept.id || concept.id == concept.name)
+                    if (queryByName)
                       onInsert(scopeName, `name = '${concept.name}'`);
                     else onInsert(scopeName, `id = ${concept.id}`);
                   }}

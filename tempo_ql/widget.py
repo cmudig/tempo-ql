@@ -15,6 +15,7 @@ DEV_ESM_URL = "http://localhost:5173/src/widget-main.js?anywidget"
 DEV_CSS_URL = ""
 BUNDLE_DIR = pathlib.Path(__file__).parent / "static"
 
+MAX_HISTORY_ITEMS = 10
 
 class TempoQLWidget(anywidget.AnyWidget):
     """
@@ -62,6 +63,10 @@ class TempoQLWidget(anywidget.AnyWidget):
     # Loading state
     isLoading = traitlets.Bool(False).tag(sync=True)
     loadingMessage = traitlets.Unicode("").tag(sync=True)
+    
+    # History
+    query_history = traitlets.List([]).tag(sync=True)
+    ai_history = traitlets.List([]).tag(sync=True)
     
     def __init__(self, query_engine: Optional[QueryEngine] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
         """
@@ -210,6 +215,30 @@ class TempoQLWidget(anywidget.AnyWidget):
             k: {**v, 'result': make_query_result_summary(v['result'], self.ids)}
             for k, v in subqueries.items()
         }
+        
+    # ==== HISTORY ====
+    
+    def add_query_to_history(self, query: str):
+        """Adds the given query to the query history."""
+        # Remove any existing entry with the same query
+        history = [
+            item for item in self.query_history if item.get("query") != query
+        ]
+        # Insert the new query at the beginning
+        history.insert(0, {"query": query, 
+                                      "timestamp": datetime.datetime.now().strftime("%m/%d/%Y, %H:%M:%S")})
+        # Trim the list to MAX_HISTORY_ITEMS
+        self.query_history = history[:MAX_HISTORY_ITEMS]
+        
+    def add_ai_question_to_history(self, question: str, answer: str, query: Optional[str]):
+        # Insert the new query at the beginning
+        ai_history = [*self.ai_history]
+        ai_history.insert(0, {"question": question,
+                                "answer": answer or "",
+                                **({"query": query} if query else {}), 
+                                "timestamp": datetime.datetime.now().strftime("%m/%d/%Y, %H:%M:%S")})
+        # Trim the list to MAX_HISTORY_ITEMS
+        self.ai_history = ai_history[:MAX_HISTORY_ITEMS]
 
     # ==== SCOPE ANALYSIS ====
     
@@ -283,6 +312,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         finally:
             self._set_loading(False)
             self.process_trigger = ""
+            self.add_query_to_history(query)
 
     @traitlets.observe('llm_trigger')
     def _on_llm_trigger(self, change):
@@ -328,6 +358,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._set_loading(False)  # Clear loading state
             self.llm_trigger = ''
             self.llm_loading = False
+            self.add_ai_question_to_history(question, self.llm_response, self.extracted_query or None)
 
 
     @traitlets.observe('scope_analysis_trigger')

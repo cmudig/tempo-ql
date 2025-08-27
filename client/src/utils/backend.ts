@@ -48,6 +48,9 @@ export function createBackendConnection(model: BackendModel) {
   const llmExplanation = traitlet(model, 'llm_explanation', '');
   const hasExtractedQuery = traitlet(model, 'has_extracted_query', false);
 
+  const queryHistory = traitlet(model, 'query_history', []);
+  const aiHistory = traitlet(model, 'ai_history', []);
+
   // Store text input separately
   let currentTextInput = '';
 
@@ -71,6 +74,8 @@ export function createBackendConnection(model: BackendModel) {
     llmExplanation,
     hasExtractedQuery,
     textInput,
+    queryHistory,
+    aiHistory,
 
     runQuery: (textInput: string) => {
       model.set('text_input', textInput);
