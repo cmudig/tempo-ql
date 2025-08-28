@@ -5,6 +5,7 @@
   import SliceMetricHistogram from './SliceMetricHistogram.svelte';
   import SliceMetricBar from './SliceMetricBar.svelte';
   import * as d3 from 'd3';
+  import { theme } from '../../stores/theme';
 
   onMount(() => {
     console.log('mounted metric hcart');
@@ -19,6 +20,7 @@
       value={values.mean ?? 0}
       width={null}
       color="#d97706"
+      fullBarColor={$theme == 'dark' ? '#374151' : '#e5e7eb'}
       showFullBar
     >
       <span slot="caption">
@@ -33,6 +35,7 @@
       value={(values.count ?? 0) / (values.total ?? 1)}
       width={null}
       color="#d97706"
+      fullBarColor={$theme == 'dark' ? '#374151' : '#e5e7eb'}
       showFullBar
     >
       <span slot="caption">

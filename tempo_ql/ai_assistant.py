@@ -178,7 +178,9 @@ Be clear, concise and friendly but professional, and do not include praise.
             question = f"Query: ```tempoql\n{query}\n```"
             return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
 Given this information, I have written a TempoQL query below and I would like you to explain what it does.
-Be clear, concise and friendly but professional, and do not include praise.
+You may call the search_concepts function to explain the meaning of data element queries if appropriate (for instance, to decode data elements referred to by a concept ID).
+
+Be clear, concise and friendly but professional in your response, and do not include praise.
 
 Provide a list of intuitive steps that the query follows to produce the response.
 Some steps might include:
@@ -325,15 +327,16 @@ Output:
                         if ("name" in query_filter) == ("id" in query_filter):
                             function_response = "The input query must select based on exactly one of 'name' or 'id'. Please try again."
                         else:
-                            query_filter = ConceptFilter(*(query_filter['name'] if 'name' in query_filter else query_filter['id']))
+                            query_field = 'name' if 'name' in query_filter else 'id'
+                            query_filter = ConceptFilter(*query_filter[query_field])
                             # Use provided scope or None (which searches all scopes)
                             scope = args.get("scope", None)
                             available_names = self.query_engine.dataset.list_names(scope=scope, return_counts=True)
-                            matching_names = available_names[query_filter.filter_series(available_names["name"])]
+                            matching_names = available_names[query_filter.filter_series(available_names[query_field])]
                             function_response = json.dumps(matching_names.head(100).to_dict(orient='records'))
                             if len(matching_names) >= 100:
                                 function_response = "More than 100 concepts matched the query. The results are truncated.\n" + function_response
-                        print("Responding to function call:", function_response)
+                        print("Responding to function call:", query_filter, function_response)
                         from google.genai import types
                         function_response = types.Part.from_function_response(
                             name=function_call.name,
@@ -350,11 +353,11 @@ Output:
                         raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
                 else:
                     responses.append(response.text)
-                    return '\n\n'.join(responses)
+                    return re.sub('\n{2,}', '\n\n', '\n\n'.join(responses))
             else:
                 print("Plain text")
                 responses.append(response.text)
-                return '\n\n'.join(responses)
+                return re.sub('\n{2,}', '\n\n', '\n\n'.join(responses))
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
         

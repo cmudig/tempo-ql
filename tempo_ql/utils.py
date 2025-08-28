@@ -128,19 +128,22 @@ def make_query_result_summary(query_result, all_ids):
     if isinstance(query_result, Intervals):
         base["durations"] = make_series_summary(query_result.get_end_times() - query_result.get_start_times(), value_type="continuous")
     
-    if hasattr(query_result, "get_values") and (~pd.isna(query_result.get_values())).sum() > 0:
+    if hasattr(query_result, "get_values"):
         vals = query_result.get_values()
-        base["missingness"] = {
-            "rate": {
-                "type": "count",
-                "count": pd.isna(vals).sum(),
-                "total": len(vals)
-            },
-            **({"rate_per_trajectory": make_series_summary(pd.isna(vals).groupby(ids).agg('mean'), value_type='continuous')}
-               if ids is not None else {})
-        }
-        
-        base["values"] = make_series_summary(vals)
+        if (~pd.isna(vals)).sum() > 0:
+            base["missingness"] = {
+                "rate": {
+                    "type": "count",
+                    "count": pd.isna(vals).sum(),
+                    "total": len(vals)
+                },
+                **({"rate_per_trajectory": make_series_summary(pd.isna(vals).groupby(ids).agg('mean'), value_type='continuous')}
+                if ids is not None else {})
+            }
+            
+            base["values"] = make_series_summary(vals)
+        else:
+            base["values"] = {"length": len(vals)}
         
     return base
 

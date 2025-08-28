@@ -31,7 +31,7 @@
   $: console.log('values', values);
 </script>
 
-{#if values && values.values}
+{#if values && (values.ids || values.missingness || values.values)}
   <div class="text-sm text-gray-700 dark:text-gray-300 mb-4">
     <span class="font-semibold">Type:</span>
     <span class="font-mono">{values.type || 'unknown'}</span>
@@ -55,7 +55,7 @@
         <div>
           <span class="font-bold text-gray-900 dark:text-gray-100">Count:</span>
           <span class="tabular-nums text-gray-700 dark:text-gray-200"
-            >{formatNumber(values.values.length ?? 0)}</span
+            >{formatNumber(values.values?.length ?? 0)}</span
           >
           <span class="text-gray-500 dark:text-gray-400">rows</span>
         </div>
@@ -84,7 +84,7 @@
       {/if}
     </div>
     <!-- Missingness row with dropdown -->
-    {#if (values.missingness.rate.count ?? 0) > 0}
+    {#if !!values.missingness && (values.missingness.rate.count ?? 0) > 0}
       <div
         class="flex flex-col bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-base w-full rounded-md overflow-hidden"
       >
@@ -172,10 +172,20 @@
     <div
       class="flex flex-col bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 px-4 py-2 text-base w-full rounded-md"
     >
-      <div class="mb-2 text-sm font-bold text-gray-900 dark:text-gray-100 mr-2">
-        Values:
-      </div>
-      <MetricChartView values={values.values} />
+      {#if !!values.values?.type}
+        <div
+          class="mb-2 text-sm font-bold text-gray-900 dark:text-gray-100 mr-2"
+        >
+          Values:
+        </div>
+        <MetricChartView values={values.values} />
+      {:else}
+        <div class="text-sm font-bold text-gray-900 dark:text-gray-100 mr-2">
+          Values: <span class="font-normal text-gray-500 dark:text-gray-400"
+            >none</span
+          >
+        </div>
+      {/if}
     </div>
   </div>
 {/if}

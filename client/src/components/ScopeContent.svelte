@@ -9,6 +9,7 @@
     faWrench,
   } from '@fortawesome/free-solid-svg-icons';
   import Hoverable from '../utils/Hoverable.svelte';
+  import { theme } from '../stores/theme';
 
   export let scopeName: string = '';
   export let isAnalyzed: boolean = false;
@@ -361,7 +362,7 @@
                       showTooltip={false}
                       showFullBar={true}
                       color="#3b82f6"
-                      fullBarColor="#9ca3af"
+                      fullBarColor={$theme == 'dark' ? '#374151' : '#e5e7eb'}
                       horizontalLayout={true}
                     />
                   </div>

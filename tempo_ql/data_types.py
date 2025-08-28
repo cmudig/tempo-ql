@@ -991,6 +991,8 @@ class Intervals(TimeSeriesQueryable):
     def get_values(self):
         return self.df[self.value_field]
     
+    def get_types(self): return self.df[self.type_field]
+    
     def get_start_times(self):
         return self.df[self.start_time_field]
     
