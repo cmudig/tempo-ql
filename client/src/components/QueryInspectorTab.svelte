@@ -1,40 +1,38 @@
 <script lang="ts">
   import TextInputCard from './TextInputCard.svelte';
   import QueryResultCard from './QueryResultCard.svelte';
-  import SQLDisplay from './SQLDisplay.svelte';
   import SubquerySection from './SubquerySection.svelte';
   import AIAssistantSection from './AIAssistantSection.svelte';
+  import { formatMessage } from '../utils/markdown_format';
+  import Fa from 'svelte-fa';
+  import { faBoltLightning } from '@fortawesome/free-solid-svg-icons';
+  import MarkdownOutput from './MarkdownOutput.svelte';
 
   export let textInput: string = '';
   export let onTextInput: (value: string) => void = () => {};
   export let dataFields: string[] = [];
   export let onRun: () => void = () => {};
   export let onExplain: () => void = () => {};
-  export let message: string = '';
+  export let queryError: string = '';
   export let values: any = {};
-  export let idsLength: number = 0;
-  export let subqueryEnabled: boolean = false;
   export let subqueries: any = {};
-  export let onSubqueryToggle: (enabled: boolean) => void = () => {};
   export let width: string = 'w-full';
 
   // AI Assistant props
   export let onLLMSubmit: (question: string) => void = () => {};
-  export let llmMessage: string = '';
+  export let llmResponse: string = '';
   export let llmLoading: boolean = false;
   export let llmError: string = '';
-  export let llmEnabled: boolean = false;
+  export let llmAvailable: boolean = false;
   export let apiStatus: string = '';
   export let extractedQuery: string = '';
-  export let aiExplanation: string = '';
+  export let llmExplanation: string = '';
   export let hasExtractedQuery: boolean = false;
   export let onQueryExtracted: () => void = () => {};
 
   export let onHistoryClick: () => void = () => {};
   export let onQueryHistoryClick: () => void = () => {};
-  export let aiAssistantRef: HTMLElement | undefined = undefined;
-  export let aiInputValueOverride: string = '';
-  export let historicalResponse: string = '';
+  export let aiQuestion: string = '';
 </script>
 
 <div class="flex {width} h-full">
@@ -43,8 +41,7 @@
     <!-- Text Input Card -->
     <div class="flex-auto">
       <TextInputCard
-        value={textInput}
-        onInput={onTextInput}
+        bind:value={textInput}
         {dataFields}
         {onRun}
         {onExplain}
@@ -53,24 +50,26 @@
       />
     </div>
 
-    {#if llmEnabled}
+    {#if llmAvailable}
       <!-- AI Assistant Section with scrollable area -->
-      <div class="w-full h-1/2 overflow-hidden" bind:this={aiAssistantRef}>
+      <div class="w-full h-1/2 overflow-hidden">
         <AIAssistantSection
           onSubmit={onLLMSubmit}
-          message={llmMessage}
+          {llmResponse}
           isLoading={llmLoading}
           error={llmError}
           {apiStatus}
           width="w-full"
           scrollable={true}
           {extractedQuery}
-          {aiExplanation}
           {hasExtractedQuery}
           {onQueryExtracted}
           {onHistoryClick}
-          inputValueOverride={aiInputValueOverride}
-          {historicalResponse}
+          bind:question={aiQuestion}
+          onRun={(text) => {
+            textInput = text;
+            onRun();
+          }}
         />
       </div>
     {/if}
@@ -78,30 +77,73 @@
 
   <!-- Right side: Query Output, Query Result Card and Subquery Section -->
   <div
-    class="flex-auto p-4 border-l border-slate-400 dark:border-slate-600 h-full overflow-auto"
+    class="flex-auto p-4 border-l border-gray-400 dark:border-gray-600 h-full overflow-auto"
   >
-    <div class="space-y-2">
-      <QueryResultCard {values} {idsLength} width="w-full" scrollable={false} />
+    {#if !!queryError}
       <div
-        class="flex-shrink-0 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3"
+        class="bg-red-50 dark:bg-red-800/40 rounded-lg border border-red-200 dark:border-red-400 p-4 mb-4"
       >
-        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Query Output
+        <h3 class="text-lg font-medium text-red-700 dark:text-red-100 mb-2">
+          Query Error
         </h3>
-        <div
-          class="text-xs font-mono text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-900 rounded border p-2 max-h-20 overflow-y-auto"
-        >
-          {message || 'No query executed yet...'}
+        <div class="text-sm font-mono text-gray-800 dark:text-gray-100">
+          {queryError}
         </div>
       </div>
-
-      <SubquerySection
-        width="w-full"
-        enabled={subqueryEnabled}
-        {subqueries}
-        {idsLength}
-        onToggle={onSubqueryToggle}
-      />
+    {/if}
+    {#if llmAvailable}
+      <div
+        class="px-2 mb-4 {width} dark:text-gray-100"
+        class:opacity-50={(!values || Object.keys(values).length == 0) &&
+          !queryError}
+      >
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            Explanation
+          </h3>
+          <button
+            class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
+            on:click={() => {
+              onExplain();
+            }}
+            disabled={(!values || Object.keys(values).length == 0) &&
+              !queryError}
+          >
+            <Fa icon={faBoltLightning} class="inline mr-2" />
+            {#if !!queryError}Explain and Fix{:else}Explain{/if}
+          </button>
+        </div>
+        {#if llmExplanation}
+          <MarkdownOutput
+            text={llmExplanation}
+            collapseLength={250}
+            onRun={(text) => {
+              textInput = text;
+              onRun();
+            }}
+          />
+        {/if}
+      </div>
+    {/if}
+    <div
+      class="px-2 mb-4 {width} dark:text-gray-100"
+      class:opacity-50={!values || Object.keys(values).length == 0}
+    >
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          Query Result
+        </h3>
+      </div>
+      {#if !!values && Object.keys(values).length > 0}
+        <QueryResultCard {values} />
+      {:else}
+        <!-- Empty state -->
+        <div class="text-center py-8 text-gray-900 dark:text-gray-100">
+          No query results
+        </div>
+      {/if}
     </div>
+
+    <SubquerySection width="w-full" {subqueries} />
   </div>
 </div>

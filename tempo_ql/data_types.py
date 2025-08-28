@@ -991,6 +991,8 @@ class Intervals(TimeSeriesQueryable):
     def get_values(self):
         return self.df[self.value_field]
     
+    def get_types(self): return self.df[self.type_field]
+    
     def get_start_times(self):
         return self.df[self.start_time_field]
     
@@ -1561,7 +1563,7 @@ class TimeIndex(TimeSeriesQueryable):
                     if isinstance(result, pd.Series):
                         raise ValueError(f"Cannot complete pandas method call '{name}' on {type(self)} because it returned a Series that isn't aligned with the original Series.")
                     return result
-            return wrap_pandas_method
+                return wrap_pandas_method
         raise AttributeError(name)
 
     def __abs__(self): return self.with_times(self.get_times().__abs__())

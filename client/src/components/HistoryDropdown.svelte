@@ -1,22 +1,28 @@
 <script lang="ts">
+  import { faXmark } from '@fortawesome/free-solid-svg-icons';
+  import Fa from 'svelte-fa';
+
   export let isVisible: boolean = false;
   export let history: Array<{
     question: string;
     answer: string | null;
     query: string | null;
-    timestamp: Date;
+    timestamp: string;
   }> = [];
   export let onClose: () => void = () => {};
   export let onSelect: (historyItem: {
     question: string;
     answer: string | null;
     query: string | null;
-    timestamp: Date;
+    timestamp: string;
   }) => void = () => {};
   export let position: { top: number; left: number } = { top: 0, left: 0 };
 
   // Format timestamp for display
-  function formatTimestamp(timestamp: Date): string {
+  function formatTimestamp(timestampString: string): string {
+    let timestamp = new Date();
+    timestamp.setTime(Date.parse(timestampString));
+    console.log('format:', timestampString, Date.parse(timestampString));
     const now = new Date();
     const diff = now.getTime() - timestamp.getTime();
     const minutes = Math.floor(diff / 60000);
@@ -32,52 +38,35 @@
   // Handle click outside to close
   function handleClickOutside(event: MouseEvent) {
     const target = event.target as HTMLElement;
-    if (!target.closest('.history-dropdown')) {
-      onClose();
-    }
+    if (!!onClose) onClose();
   }
 </script>
 
 {#if isVisible}
   <!-- Backdrop -->
   <div
-    class="fixed inset-0 bg-black bg-opacity-25 z-40"
-    on:click={handleClickOutside}
+    class="absolute top-0 left-0 w-full h-full bg-white/80 z-40"
+    on:click|stopPropagation={handleClickOutside}
   ></div>
 
   <!-- Dropdown -->
   <div
-    class="fixed z-50 history-dropdown"
-    style="top: {position.top}px; left: {position.left}px;"
+    class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-50 pointer-events-none"
   >
     <div
-      class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-w-md w-80 max-h-96 overflow-hidden"
+      class="bg-white dark:bg-gray-800 border-2 border-gray-300/50 dark:border-gray-600/2 rounded-lg w-2/3 h-2/3 overflow-auto pointer-events-auto"
     >
       <!-- Header -->
       <div
-        class="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700"
+        class="flex items-center justify-between px-4 py-2 bg-gray-200 dark:bg-gray-700 dark:text-white"
       >
-        <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100">
-          AI Conversation History
-        </h3>
+        <h3 class="font-medium text-gray-900">Query History</h3>
         <button
           on:click={onClose}
-          class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-1 rounded"
+          class="text-gray-600 dark:text-gray-300 hover:opacity-50 transition-colors p-2"
           title="Close history"
         >
-          <svg
-            class="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            ></path>
-          </svg>
+          <Fa icon={faXmark} />
         </button>
       </div>
 
@@ -85,19 +74,25 @@
       <div class="max-h-80 overflow-y-auto">
         {#if history.length === 0}
           <div class="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
-            No conversation history yet
+            No query history yet
           </div>
         {:else}
           {#each history as historyItem, index}
             <div
-              class="p-3 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors"
+              class="p-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors"
               on:click={() => onSelect(historyItem)}
             >
-              <div class="flex items-start justify-between mb-2">
+              <div class="flex items-start justify-between">
                 <h4
                   class="text-sm font-medium text-gray-900 dark:text-gray-100 line-clamp-2 flex-1"
                 >
-                  {historyItem.question}
+                  {#if historyItem.question}
+                    {historyItem.question}
+                  {:else}
+                    <span class="font-mono"
+                      >{historyItem.query || 'No query extracted'}</span
+                    >
+                  {/if}
                 </h4>
                 <span
                   class="text-xs text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0"
@@ -105,21 +100,16 @@
                   {formatTimestamp(historyItem.timestamp)}
                 </span>
               </div>
-              <p class="text-xs text-gray-600 dark:text-gray-300 line-clamp-3">
-                {historyItem.answer || 'No response available'}
-              </p>
+              {#if historyItem.answer}
+                <p
+                  class="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 mt-2"
+                >
+                  {historyItem.answer}
+                </p>
+              {/if}
             </div>
           {/each}
         {/if}
-      </div>
-
-      <!-- Footer -->
-      <div
-        class="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700"
-      >
-        <div class="text-xs text-gray-500 dark:text-gray-400 text-center">
-          Showing {history.length} of 10 recent conversations
-        </div>
       </div>
     </div>
   </div>

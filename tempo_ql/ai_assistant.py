@@ -2,6 +2,7 @@ import os
 import re
 from typing import Optional, Dict, Any, List, Tuple
 import json
+import traceback
 from tempo_ql.generic.dataset import ConceptFilter
 
 search_concepts_function = {
@@ -57,8 +58,10 @@ class AIAssistant:
                 self.genai_client = genai.Client(api_key=self.api_key)
                 tools = types.Tool(function_declarations=[search_concepts_function])
                 self.config = types.GenerateContentConfig(tools=[tools])
+                self.fast_config = types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0))
                 self.is_enabled = True
             except Exception as e:
+                traceback.print_exc()
                 print(f"Warning: Failed to initialize Gemini client: {e}")
                 self.is_enabled = False
     
@@ -96,7 +99,7 @@ class AIAssistant:
         elif not self.is_enabled:
             return "API key provided but client initialization failed"
         else:
-            return f"Configured: {self.api_key[:10]}..."
+            return f"Configured"
     
     def is_available(self) -> bool:
         """
@@ -107,7 +110,7 @@ class AIAssistant:
         """
         return self.is_enabled and self.genai_client is not None
     
-    def _create_data_analysis_prompt(self, user_question: str, table_context: str) -> str:
+    def _create_data_analysis_prompt(self, user_question: str, table_context: str, existing_query: Optional[str] = None) -> str:
         """
         Create a context-aware prompt for data analysis.
         
@@ -130,167 +133,109 @@ Instruction: <INSTRUCTION>
 
         base_prompt = base_prompt.replace("<DATASET_INFO>", table_context)
         base_prompt = base_prompt.replace("<INSTRUCTION>", user_question)
+        
+        if existing_query is not None:
+            base_prompt += f"\n\nExisting query:\n```tempoql\n{existing_query}\n```"
 
         return base_prompt
     
-    def _create_explain_prompt(self, question: str, table_context: str) -> str:
+    def _create_explain_prompt(self, query: str, query_error: Optional[str], table_context: str) -> str:
         """
         Create a prompt for explaining TempoQL queries.
         
         Args:
-            question: The user's question (should contain a TempoQL query to explain)
+            query: The query to explain
+            query_error: An error to explain along with the query
             
         Returns:
             Formatted prompt for explaining queries
         """
         with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
             base_prompt = file.read()
-        return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
-Given this information, I have written a TempoQL query below and I would like you to explain what it does. 
-You do not need to call any functions to produce your explanation.
-Be clear, concise and friendly but professional, and do not include praise.
-Include each of the following in your response if applicable:
-1. What data the query extracts from the dataset
-2. How the data is transformed
-3. Aggregation expressions used to structure the data
-
-Query: {question}
-"""
-
-    def _create_fix_prompt(self, failed_query: str, error_message: str, table_context: str) -> str:
-        """
-        Create a prompt for fixing failed TempoQL queries.
-        
-        Args:
-            failed_query: The query that failed to execute
-            error_message: The error message from the failed execution
-            table_context: Context about available data tables and structure
             
-        Returns:
-            Formatted prompt for fixing the query
-        """
-        with open(os.path.join(os.path.dirname(__file__), "prompt.txt"), "r") as file:
-            base_prompt = file.read()
+        if query_error:
+            question = f"Query: ```tempoql\n{query}\n```\n\nError: {query_error}"
+            return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
+Given this information, I have written a TempoQL query below which produced an error when I ran it. 
+The error will be provided below the query and I would like you to explain the error and attempt to fix the issue. If you can fix the issue, provide the code in a code block labeled tempoql, like so:
 
-        fix_instruction = f"""The user tried to execute this TempoQL query but it failed:
-
-**Failed Query:**
 ```tempoql
-{failed_query}
+tempo code goes here
 ```
 
-**Error Message:**
-{error_message}
+Make sure that the new query:
+- Fixes any syntax or logical errors
+- Uses correct data element references
+- Follows proper TempoQL structure
+- Is likely to execute successfully
 
-Please help fix this query by:
+Be clear, concise and friendly but professional, and do not include praise.
 
-1. **Analyzing the Error**: Explain what went wrong with the original query and why it failed.
+{question}
+"""
 
-2. **Providing a Fixed Query**: Generate a corrected TempoQL query that addresses the issues in the original query. Make sure the new query:
-   - Fixes the syntax or logical errors
-   - Uses correct data element references
-   - Follows proper TempoQL structure
-   - Is likely to execute successfully
+        else:
+            question = f"Query: ```tempoql\n{query}\n```"
+            return base_prompt.replace("<DATASET_INFO>", table_context) + f"""
+Given this information, I have written a TempoQL query below and I would like you to explain what it does.
+You may call the search_concepts function to explain the meaning of data element queries if appropriate (for instance, to decode data elements referred to by a concept ID).
 
-3. **Explaining the Changes**: Clearly explain what changes you made and why they fix the problem.
+Be clear, concise and friendly but professional in your response, and do not include praise.
 
-4. **How the New Query Works**: Explain what the corrected query does and what results it should produce.
+Provide a list of intuitive steps that the query follows to produce the response.
+Some steps might include:
+1. Data that the query extracts from the dataset
+2. Transformations to the data
+3. Aggregations used to structure the data
+Include only the steps that actually exist in the query.
 
-Please format your response with:
-- A clear explanation of the error
-- The fixed query in a ```tempoql code block
-- Detailed explanation of the changes made
-- Description of how the new query works"""
-
-        base_prompt = base_prompt.replace("<DATASET_INFO>", table_context)
-        base_prompt = base_prompt.replace("<INSTRUCTION>", fix_instruction)
-
-        return base_prompt
-
-
+{question}
+"""
     
-    def _is_query_generation_request(self, question: str) -> bool:
+    def _make_query_validation_prompt(self, question: str, query_text: Optional[str] = None) -> bool:
         """
-        Determine if the user is asking for query generation related to data analysis.
+        Determine if the user is asking a relevant query and determine the type of query it is.
         
         Args:
             question: The user's question
             
         Returns:
-            True if the question is asking for TempoQL query generation
+            a prompt to check the type of query
         """
-        question_lower = question.lower()
-        
-        # Keywords that indicate data analysis/query generation requests
-        generation_keywords = [
-            # Direct query requests
-            'query', 'find', 'get', 'show', 'analyze', 'analysis', 'calculate', 'count',
-            'measure', 'extract', 'retrieve', 'select', 'filter', 'search',
-            
-            # Temporal analysis keywords
-            'time', 'temporal', 'before', 'after', 'during', 'between', 'every',
-            'daily', 'weekly', 'monthly', 'hourly', 'interval', 'period',
-            
-            # Medical/data analysis terms
-            'patient', 'diagnosis', 'medication', 'treatment', 'procedure', 'measurement',
-            'vital', 'lab', 'test', 'observation', 'condition', 'drug', 'device',
-            'encounter', 'visit', 'admission', 'discharge',
-            
-            # Analysis operations
-            'average', 'mean', 'median', 'sum', 'total', 'maximum', 'minimum',
-            'first', 'last', 'latest', 'earliest', 'recent', 'trend', 'pattern',
-            'frequency', 'rate', 'duration', 'length', 'timeline',
-            
-            # Data exploration
-            'what', 'when', 'how many', 'how often', 'which', 'where'
-        ]
-        
-        # Check if any generation keywords are present
-        for keyword in generation_keywords:
-            if keyword in question_lower:
-                return True
-                
-        # Check for question patterns that suggest data analysis
-        question_patterns = [
-            'can you', 'could you', 'please', 'i want', 'i need', 'help me',
-            'create', 'generate', 'build', 'make', 'write'
-        ]
-        
-        for pattern in question_patterns:
-            if pattern in question_lower:
-                return True
-        
-        return False
-    
-    def _contains_tempoql_query(self, question: str) -> bool:
-        """
-        Check if the question contains a TempoQL query to explain.
-        
-        Args:
-            question: The user's question
-            
-        Returns:
-            True if the question contains TempoQL syntax
-        """
-        # Look for TempoQL syntax patterns
-        tempoql_patterns = [
-            '{', '}',  # Data elements
-            'every', 'before', 'after', 'at', 'during',  # Temporal operators
-            '#now', '#start', '#end',  # Time references
-            'mean', 'sum', 'count', 'first', 'last',  # Aggregation functions
-            'contains', 'scope =', 'name =', 'id =',  # Query syntax
-        ]
-        
-        question_lower = question.lower()
-        
-        # Check for TempoQL patterns
-        pattern_count = 0
-        for pattern in tempoql_patterns:
-            if pattern in question_lower:
-                pattern_count += 1
-        
-        # If we find multiple TempoQL patterns, it's likely a query
-        return pattern_count >= 2
+        return f"""
+You are a helpful data analysis assistant. You are an expert on a new query language called TempoQL that is specialized to deal with electronic health record data. TempoQL queries operate on time-series medical data.
+
+Your job is to take a user-provided question and determine if it is a valid TempoQL question and if the user's existing query text is relevant to answer the question.
+The user might have written a previous existing query that's unrelated to their current question. You need to determine whether that existing query is needed for the new question.
+Valid TempoQL questions can ask you to generate a new query, take an existing query and update it, answer questions about an existing query, or answer general questions about TempoQL.
+If the question is valid, tell me whether the existing query is needed to answer the question or not by outputting the single word 'yes' (existing query is needed to answer) or 'no' (existing query not needed).
+If the question is invalid, output the single word 'invalid'.
+
+Question:
+can you help me extract the patient's heart rate every hour
+Query text:
+mean {{Hemoglobin; scope = Measurement}} before #now impute mean every 6 hours
+Output:
+no
+
+Question:
+run every day instead of every 5 days
+Query text:
+last {{Weight; scope = Observation}} from #now - 1 day to #now every 5 days
+Output:
+yes
+
+Question:
+how are you
+Output:
+invalid
+
+Question:
+{question}
+Query text:
+{query_text or '<empty>'}
+Output:
+"""
     
     def _extract_tempoql_query(self, text: str) -> Optional[str]:
         """
@@ -303,12 +248,12 @@ Please format your response with:
             Extracted TempoQL query or None if not found
         """
         if not text:
-            return None
+            return None, text
         
         # Look for code blocks with tempoql language
         tempoql_match = re.search(r'```tempoql\n?([\s\S]*?)```', text)
         if tempoql_match:
-            return tempoql_match.group(1).strip()
+            return tempoql_match.group(1).strip(), re.sub(r'^' + re.escape(tempoql_match.group(0)) + r'[\r\n]+', '', text)
         
         # Fallback: look for any code block that might contain a query
         code_block_match = re.search(r'```(?:\w+)?\n?([\s\S]*?)```', text)
@@ -316,30 +261,9 @@ Please format your response with:
             code = code_block_match.group(1).strip()
             # Check if it looks like a TempoQL query (contains common TempoQL patterns)
             if '{' in code and any(keyword in code for keyword in ['every', 'before', 'after', 'at']):
-                return code
+                return code, re.sub(r'^' + re.escape(code_block_match.group(0)) + r'[\r\n]+', '', text)
         
-        return None
-    
-    def _create_explanation_message(self, text: str) -> str:
-        """
-        Create explanation-only message (remove query code blocks).
-        
-        Args:
-            text: The full AI response text
-            
-        Returns:
-            Text with TempoQL code blocks removed
-        """
-        if not text:
-            return ''
-        
-        # Remove TempoQL code blocks but keep other content
-        explanation_text = re.sub(r'```tempoql\n?[\s\S]*?```', '', text)
-        
-        # Clean up extra whitespace
-        explanation_text = re.sub(r'\n\s*\n\s*\n', '\n\n', explanation_text).strip()
-        
-        return explanation_text
+        return None, text
     
     def _process_ai_response(self, response: str) -> Dict[str, Any]:
         """
@@ -351,25 +275,15 @@ Please format your response with:
         Returns:
             Dictionary with extracted_query, explanation, and has_query fields
         """
-        extracted_query = self._extract_tempoql_query(response)
-        
-        if extracted_query:
-            explanation = self._create_explanation_message(response)
-            return {
-                'extracted_query': extracted_query,
-                'explanation': explanation,
-                'has_query': True,
-                'raw_response': response
-            }
-        else:
-            return {
-                'extracted_query': None,
-                'explanation': response,
-                'has_query': False,
-                'raw_response': response
-            }
+        extracted, cleaned = self._extract_tempoql_query(response)
+        return {
+            'extracted_query': extracted or '',
+            'explanation': cleaned,
+            'has_query': True,
+            'raw_response': response
+        }
 
-    def _call_gemini_api(self, prompt: str, max_num_calls: int = 10) -> str:
+    def _call_gemini_api(self, prompt: str, max_num_calls: int = 10, fast_model: bool = False) -> str:
         """
         Call the Gemini API and return the response.
         
@@ -392,19 +306,20 @@ Please format your response with:
                 role="user", parts=[types.Part(text=prompt)]
             )
         ]
+        responses = []
         while num_calls < max_num_calls:
             try:
                 response = self.genai_client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-flash",
                     contents=contents,
-                    config=self.config
+                    config=self.fast_config if fast_model else self.config
                 )
             except Exception as e:
+                traceback.print_exc()
                 raise Exception(f"Error calling Gemini API: {str(e)}")
             
-            print("Gemini response:", response.candidates[0].content)
-            if response.candidates[0].content.parts[0].function_call:
-                function_call = response.candidates[0].content.parts[0].function_call
+            if response.candidates[0].content.parts and any(p.function_call is not None for p in response.candidates[0].content.parts):
+                function_call = next(p.function_call for p in response.candidates[0].content.parts if p.function_call is not None)
                 if function_call.name == "search_concepts":
                     try:
                         args = function_call.args
@@ -412,15 +327,16 @@ Please format your response with:
                         if ("name" in query_filter) == ("id" in query_filter):
                             function_response = "The input query must select based on exactly one of 'name' or 'id'. Please try again."
                         else:
-                            query_filter = ConceptFilter(*(query_filter['name'] if 'name' in query_filter else query_filter['id']))
+                            query_field = 'name' if 'name' in query_filter else 'id'
+                            query_filter = ConceptFilter(*query_filter[query_field])
                             # Use provided scope or None (which searches all scopes)
                             scope = args.get("scope", None)
                             available_names = self.query_engine.dataset.list_names(scope=scope, return_counts=True)
-                            matching_names = available_names[query_filter.filter_series(available_names["name"])]
+                            matching_names = available_names[query_filter.filter_series(available_names[query_field])]
                             function_response = json.dumps(matching_names.head(100).to_dict(orient='records'))
                             if len(matching_names) >= 100:
                                 function_response = "More than 100 concepts matched the query. The results are truncated.\n" + function_response
-                        print("Responding to function call:", function_response)
+                        print("Responding to function call:", query_filter, function_response)
                         from google.genai import types
                         function_response = types.Part.from_function_response(
                             name=function_call.name,
@@ -428,25 +344,44 @@ Please format your response with:
                         )
                         contents.append(response.candidates[0].content)
                         contents.append(types.Content(role="user", parts=[function_response]))
+                        if response.text is not None:
+                            responses.append(response.text)
+                        responses.append('(Searching concepts...)')
 
                     except Exception as e:
+                        traceback.print_exc()
                         raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
+                else:
+                    responses.append(response.text)
+                    return re.sub('\n{2,}', '\n\n', '\n\n'.join(responses))
             else:
-                return response.text
+                print("Plain text")
+                responses.append(response.text)
+                return re.sub('\n{2,}', '\n\n', '\n\n'.join(responses))
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
-    
-
-    
-    def process_question(self, question: str, mode: str = "generate", failed_query: str = None, error_message: str = None) -> Dict[str, Any]:
+        
+    def validate_question(self, question: str, existing_query: Optional[str]) -> bool:
+        prompt = self._make_query_validation_prompt(question, existing_query)
+        response = self._call_gemini_api(prompt, fast_model=True)
+        response = re.sub(r'[^A-Za-z]', '', response).lower()
+        if response not in ('yes', 'no', 'invalid'):
+            raise ValueError("Question validation failed - please try again.")
+        
+        if response == 'invalid':
+            raise ValueError("The question does not seem to involve TempoQL queries. I can only answer questions related to TempoQL.")
+        
+        return response == 'yes'
+        
+    def process_question(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user question and return a processed AI response.
         
         Args:
             question: The user's question
-            mode: "generate" to create TempoQL queries, "explain" to explain existing queries, "fix" to fix failed queries
-            failed_query: The query that failed (only used in fix mode)
-            error_message: The error message from the failed query (only used in fix mode)
+            explain: Whether to explain the query or answer the question
+            query: A query to explain
+            query_error: An error 
             
         Returns:
             Dictionary with processed AI response including extracted query and explanation
@@ -462,56 +397,26 @@ Please format your response with:
         
         try:
             # Process based on the mode
-            if mode == "generate":
-                # For generate mode, check if the question is asking for query generation
-                is_relevant = self._is_query_generation_request(question)
-                print(f"🔍 Question relevance check for generate mode: {is_relevant}")
-                print(f"🔍 Question: {question}")
-                if not is_relevant:
-                    return {
-                        'extracted_query': None,
-                        'explanation': "I can only help with generating TempoQL queries based on your data analysis needs or explaining existing TempoQL queries. Please ask me to create a query for analyzing your temporal data or to explain a TempoQL query you've written.",
-                        'has_query': False,
-                        'raw_response': "I can only help with generating TempoQL queries based on your data analysis needs or explaining existing TempoQL queries. Please ask me to create a query for analyzing your temporal data or to explain a TempoQL query you've written.",
-                        'error': False
-                    }
-                prompt = self._create_data_analysis_prompt(question, self.query_engine.dataset.get_table_context())
-            elif mode == "explain":
-                # For explain mode, check if the question contains a TempoQL query to explain
-                has_query = self._contains_tempoql_query(question)
-                print(f"🔍 TempoQL query detection for explain mode: {has_query}")
-                print(f"🔍 Question: {question}")
-                if not has_query:
-                    return {
-                        'extracted_query': None,
-                        'explanation': "I can only explain TempoQL queries. Please provide a TempoQL query in your question for me to explain, or use the regular 'Ask' feature to generate a new query.",
-                        'has_query': False,
-                        'raw_response': "I can only explain TempoQL queries. Please provide a TempoQL query in your question for me to explain, or use the regular 'Ask' feature to generate a new query.",
-                        'error': False
-                    }
-                prompt = self._create_explain_prompt(question, self.query_engine.dataset.get_table_context())
-            elif mode == "fix":
-                # For fix mode, we need the failed query and error message
-                if not failed_query or not error_message:
-                    return {
-                        'extracted_query': None,
-                        'explanation': "Fix mode requires both a failed query and error message.",
-                        'has_query': False,
-                        'raw_response': "Fix mode requires both a failed query and error message.",
-                        'error': True
-                    }
-                print(f"🔍 Fix mode: Attempting to fix query: {failed_query}")
-                print(f"🔍 Error message: {error_message}")
-                prompt = self._create_fix_prompt(failed_query, error_message, self.query_engine.dataset.get_table_context())
+            if not explain:
+                assert question is not None, "question must be provided to run generation"
+                needs_existing_query = self.validate_question(question, query)
+                print(f"🔍 Needs existing query for generate mode: {needs_existing_query}")
+                if needs_existing_query and not query:
+                    raise ValueError("Answering your question seems to require an existing TempoQL query, but you haven't written one yet. Please try again.")
+                prompt = self._create_data_analysis_prompt(question, 
+                                                           self.query_engine.dataset.get_table_context(), 
+                                                           existing_query=query if needs_existing_query else None)
             else:
-                # Default to generate if mode is unrecognized
-                prompt = self._create_data_analysis_prompt(question, self.query_engine.dataset.get_table_context())
+                # For explain mode, check if the question contains a TempoQL query to explain
+                assert query is not None, "query must be provided to run explanation"
+                prompt = self._create_explain_prompt(query, query_error, self.query_engine.dataset.get_table_context())
             
             # Call Gemini API
             response = self._call_gemini_api(prompt)
             
+            print(response)
             # Process the response based on mode
-            if mode == "explain":
+            if explain:
                 # For explain mode, don't extract queries - just return the explanation
                 processed_response = {
                     'extracted_query': None,
@@ -520,14 +425,6 @@ Please format your response with:
                     'raw_response': response,
                     'error': False
                 }
-            elif mode == "fix":
-                # For fix mode, extract the fixed query and return both explanation and query
-                processed_response = self._process_ai_response(response)
-                processed_response['error'] = False
-                # Add additional context for fix mode
-                processed_response['mode'] = 'fix'
-                processed_response['original_query'] = failed_query
-                processed_response['original_error'] = error_message
             else:
                 # For generate mode, process normally to extract queries
                 processed_response = self._process_ai_response(response)
@@ -536,9 +433,10 @@ Please format your response with:
             return processed_response
             
         except Exception as e:
+            traceback.print_exc()
             return {
                 'extracted_query': None,
-                'explanation': f"Error processing question: {str(e)}",
+                'explanation': str(e),
                 'has_query': False,
                 'raw_response': f"Error processing question: {str(e)}",
                 'error': True
@@ -571,6 +469,7 @@ Please format your response with:
             }
             
         except Exception as e:
+            traceback.print_exc()
             return {
                 "success": False,
                 "message": f"Connection failed: {str(e)}",

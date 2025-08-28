@@ -1,28 +1,10 @@
 <script lang="ts">
+  import { formatMessage } from '../utils/markdown_format';
+
   export let message: string = '';
   export let isLoading: boolean = false;
   export let error: string = '';
   export let width: string = 'w-full';
-
-  // Function to format markdown-like text
-  function formatMessage(text: string): string {
-    if (!text) return '';
-
-    return (
-      text
-        // Convert **bold** to HTML
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        // Convert *italic* to HTML
-        .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        // Convert `code` to HTML
-        .replace(
-          /`(.*?)`/g,
-          '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono">$1</code>'
-        )
-        // Convert line breaks to HTML
-        .replace(/\n/g, '<br>')
-    );
-  }
 </script>
 
 <div class="bg-white p-6 border border-gray-200 {width}">
