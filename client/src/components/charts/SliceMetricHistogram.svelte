@@ -12,6 +12,7 @@
 
   export let histValues: Histogram;
   export let mean = null;
+  export let unit: string | null = null;
   export let title: string | null = null;
   export let horizontalLayout = false;
 
@@ -19,15 +20,39 @@
 
   export let color = '#3b82f6';
 
-  let data: Array<{ bin: number; count: number }> = [];
-  let histBins: Array<number> = [];
+  let data: Array<{ bin: string | number; count: number; label: string }> = [];
+  let histBins: Array<string | number> = [];
+
+  let binFormat = format('.3g');
+  let countFormat = format(',');
 
   $: if (!!histValues) {
+    let tempBins = Object.keys(histValues);
+    let precision = tempBins.reduce(
+      (curr, val, i) =>
+        i > 0
+          ? Math.min(
+              curr,
+              Math.abs(parseFloat(val) - parseFloat(tempBins[i - 1]))
+            )
+          : curr,
+      1e9
+    );
+    binFormat = format(`.${precisionFixed(precision)}f`);
+    let stringLabels = Object.keys(histValues).some(
+      (v) => v.search(/[^0-9.]/) >= 0
+    );
+    console.log('string labels:', stringLabels, Object.keys(histValues));
     data = Object.entries(histValues).map((v) => ({
-      bin: parseFloat(v[0]),
+      bin: stringLabels ? v[0] : parseFloat(v[0]),
       count: <number>v[1],
+      label: stringLabels ? v[0] : binFormat(v[0]),
     }));
-    data.sort((a, b) => a.bin - b.bin);
+    data.sort((a, b) =>
+      stringLabels
+        ? a.label.localeCompare(b.label)
+        : parseFloat(a.bin) - parseFloat(b.bin)
+    );
     histBins = data.map((v) => v.bin);
   } else {
     data = [];
@@ -37,21 +62,10 @@
   let loaded = false;
   onMount(() => setTimeout(() => (loaded = true), 0));
 
-  let hoveredBin: number;
-
-  let binFormat = format('.3g');
-  let countFormat = format(',');
-  $: if (data.length > 0) {
-    let precision = data.reduce(
-      (curr, val, i) =>
-        i > 0 ? Math.min(curr, Math.abs(val.bin - data[i - 1].bin)) : curr,
-      1e9
-    );
-    binFormat = format(`.${precisionFixed(precision)}f`);
-  }
+  let hoveredBin: string;
 
   function makeTooltipText(d) {
-    return `${binFormat(d.bin)}: ${countFormat(d.count)} instances`;
+    return `${d.label}${!!unit ? ' ' + unit : ''}: ${countFormat(d.count)} instances`;
   }
 
   $: console.log('histBins', histBins);
@@ -97,7 +111,7 @@
   >
     {#if !$$slots.caption}
       {#if hoveredBin != null}
-        {makeTooltipText(data.find((d) => d.bin == hoveredBin))}
+        {makeTooltipText(data.find((d) => d.label == hoveredBin))}
       {:else if mean != null}
         M = <strong>{format('.3')(mean)}</strong>
       {:else}
@@ -129,14 +143,14 @@
           yDomain={[0, null]}
           {data}
           custom={{
-            hoveredGet: (d) => d.bin == hoveredBin,
+            hoveredGet: (d) => d.label == hoveredBin,
           }}
         >
           <Svg>
             <Column
               fill={color}
               on:hover={(e) =>
-                (hoveredBin = e.detail != null ? e.detail.bin : null)}
+                (hoveredBin = e.detail != null ? e.detail.label : null)}
             />
             <AxisX ticks={[]} baseline gridlines={false} />
           </Svg>
@@ -149,9 +163,9 @@
     >
       {#if !$$slots.caption}
         {#if hoveredBin != null}
-          {makeTooltipText(data.find((d) => d.bin == hoveredBin))}
+          {makeTooltipText(data.find((d) => d.label == hoveredBin))}
         {:else if mean != null}
-          M = <strong>{format('.3')(mean)}</strong>
+          M = <strong>{format('.3')(mean)}{!!unit ? ' ' + unit : ''}</strong>
         {:else}
           &nbsp;{/if}
       {:else}

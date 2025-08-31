@@ -391,6 +391,10 @@
       bind:value
       on:input={handleInput}
       on:keydown={handleKeydown}
+      autocomplete="false"
+      autocapitalize="false"
+      autocorrect="false"
+      spellcheck="false"
       rows="1"
       style="color: transparent; caret-color: currentColor;"
     />
