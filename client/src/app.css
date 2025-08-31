@@ -55,9 +55,6 @@ h1 {
   a:hover {
     color: #747bff;
   }
-  button {
-    background-color: #f9f9f9;
-  }
 }
 
 .bg-slate-150 {
@@ -83,24 +80,24 @@ h1 {
   @apply bg-indigo-400;
 }
 
-.btn-slate {
-  @apply bg-slate-300;
+.btn-gray {
+  @apply bg-gray-300;
 }
-.btn-slate:hover {
+.btn-gray:hover {
   @apply opacity-70;
 }
 
-.btn-dark-slate {
-  @apply bg-slate-600 text-white;
+.btn-dark-gray {
+  @apply bg-gray-600 text-white;
 }
-.btn-dark-slate:hover {
+.btn-dark-gray:hover {
   @apply opacity-70;
 }
 
-.indigo .btn-slate {
+.indigo .btn-gray {
   @apply bg-indigo-400 text-white;
 }
-.indigo .btn-slate:hover {
+.indigo .btn-gray:hover {
   @apply bg-indigo-300 text-white;
 }
 
@@ -120,7 +117,7 @@ h1 {
   @apply bg-indigo-300;
 }
 
-.indigo .indigo\:bg-slate-700 {
+.indigo .indigo\:bg-gray-700 {
   @apply bg-indigo-700;
 }
 
@@ -215,15 +212,15 @@ input[type='search'].flat-text-input {
 }
 
 .flat-text-input-large {
-  @apply bg-slate-100 appearance-none border-2 border-slate-100 rounded text-slate-700 font-mono text-sm p-2;
+  @apply bg-gray-100 appearance-none border-2 border-gray-100 rounded text-gray-700 font-mono text-sm p-2;
 }
 
 .flat-text-input {
-  @apply bg-slate-100 appearance-none border-2 border-slate-100 rounded text-slate-700 font-mono text-xs p-2 leading-tight;
+  @apply bg-gray-100 appearance-none border-2 border-gray-100 rounded text-gray-700 font-mono text-xs p-2 leading-tight;
 }
 
 .flat-text-input-small {
-  @apply bg-slate-100 appearance-none border-2 border-slate-100 rounded text-slate-700 font-mono text-xs px-2 py-1 leading-tight;
+  @apply bg-gray-100 appearance-none border-2 border-gray-100 rounded text-gray-700 font-mono text-xs px-2 py-1 leading-tight;
 }
 
 .flat-text-input:focus,

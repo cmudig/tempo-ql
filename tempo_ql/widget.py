@@ -2,6 +2,7 @@ import pathlib
 import anywidget
 import traitlets
 import datetime
+import traceback
 from typing import Optional, Tuple, Any
 
 from .evaluator import QueryEngine
@@ -14,6 +15,7 @@ DEV_ESM_URL = "http://localhost:5173/src/widget-main.js?anywidget"
 DEV_CSS_URL = ""
 BUNDLE_DIR = pathlib.Path(__file__).parent / "static"
 
+MAX_HISTORY_ITEMS = 10
 
 class TempoQLWidget(anywidget.AnyWidget):
     """
@@ -30,21 +32,21 @@ class TempoQLWidget(anywidget.AnyWidget):
     # Query input and processing
     text_input = traitlets.Unicode("").tag(sync=True)
     process_trigger = traitlets.Unicode("").tag(sync=True)
-    message = traitlets.Unicode("").tag(sync=True)
     
     # AI Assistant
     llm_available = traitlets.Bool(False).tag(sync=True)
     llm_trigger = traitlets.Unicode("").tag(sync=True)
     llm_question = traitlets.Unicode("").tag(sync=True)
-    llm_mode = traitlets.Unicode("generate").tag(sync=True)  # "generate" or "explain"
     llm_loading = traitlets.Bool(False).tag(sync=True)
     llm_error = traitlets.Unicode("").tag(sync=True)
-    ai_explanation = traitlets.Unicode("").tag(sync=True)
+    llm_response = traitlets.Unicode("").tag(sync=True) # for general AI outputs to be shown in the lower-left
+    llm_explanation = traitlets.Unicode("").tag(sync=True) # for query explanations to be shown in the result view
     extracted_query = traitlets.Unicode("").tag(sync=True)
     has_extracted_query = traitlets.Bool(False).tag(sync=True)
     api_status = traitlets.Unicode("Checking API connection...").tag(sync=True)
     
     # Data scope analysis
+    query_for_results = traitlets.Unicode("").tag(sync=True) # keeps track of which query produced the given results
     scopes = traitlets.List([]).tag(sync=True)
     scope_analysis_trigger = traitlets.Unicode("").tag(sync=True)
     scope_concepts = traitlets.Dict({}).tag(sync=True)
@@ -52,7 +54,7 @@ class TempoQLWidget(anywidget.AnyWidget):
     # Query results
     values = traitlets.Dict().tag(sync=True)
     subqueries = traitlets.Dict({}).tag(sync=True)
-    subquery_enabled = traitlets.Bool(False).tag(sync=True)
+    query_error = traitlets.Unicode("").tag(sync=True)
     
     # Basic dataset info
     ids_length = traitlets.Int(0).tag(sync=True)
@@ -62,12 +64,10 @@ class TempoQLWidget(anywidget.AnyWidget):
     isLoading = traitlets.Bool(False).tag(sync=True)
     loadingMessage = traitlets.Unicode("").tag(sync=True)
     
-    # ==== BACKWARD COMPATIBILITY ====
-    # These are kept for frontend compatibility but map to new fields
-    llm_message = traitlets.Unicode("").tag(sync=True)  # Maps to ai_explanation
-    name = traitlets.Unicode().tag(sync=True)
-    selected_scope = traitlets.Unicode("").tag(sync=True)
-
+    # History
+    query_history = traitlets.List([]).tag(sync=True)
+    ai_history = traitlets.List([]).tag(sync=True)
+    
     def __init__(self, query_engine: Optional[QueryEngine] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
         """
         Initialize the Tempo-QL widget.
@@ -127,7 +127,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self.ids_length = len(self.ids)
             
             # Get concept names
-            names_df = self.query_engine.dataset.list_names()
+            names_df = self.query_engine.dataset.list_names(return_counts=True)
             self.list_names = (
                 names_df['name'].tolist() 
                 if hasattr(names_df, 'name') and 'name' in names_df.columns 
@@ -138,9 +138,10 @@ class TempoQLWidget(anywidget.AnyWidget):
             self.scopes = self.query_engine.dataset.get_scopes()
             
             # Initialize default values structure
-            self._set_default_values()
+            self.values = {}
             
         except Exception as e:
+            traceback.print_exc()
             print(f"⚠️ Warning: Could not initialize data state: {e}")
             self._set_empty_data_state()
 
@@ -149,16 +150,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.ids_length = 0
         self.list_names = []
         self.scopes = []
-        self._set_default_values()
-
-    def _set_default_values(self):
-        """Set default empty values structure."""
-        default_metric = {"length": 0, "missingness": 0.0, "type": "binary", "mean": 0.0, "hist": []}
-        self.values = {
-            "values": default_metric,
-            "occurrences": default_metric,
-            "durations": default_metric
-        }
+        self.values = {}
 
     # ==== UTILITY METHODS ====
     
@@ -170,8 +162,8 @@ class TempoQLWidget(anywidget.AnyWidget):
     def _clear_ai_state(self):
         """Clear all AI-related state variables."""
         self.llm_error = ""
-        self.ai_explanation = ""
-        self.llm_message = ""
+        self.llm_explanation = ""
+        self.llm_response = ""
         self.extracted_query = ""
         self.has_extracted_query = False
 
@@ -179,21 +171,20 @@ class TempoQLWidget(anywidget.AnyWidget):
         """Set AI error state consistently."""
         self._clear_ai_state()
         self.llm_error = ""  # Don't show in error field
-        self.ai_explanation = error_message
-        self.llm_message = error_message
+        self.llm_response = error_message
 
     def _set_ai_success(self, explanation: str, extracted_query: str = "", has_query: bool = False):
         """Set AI success state consistently."""
         self._clear_ai_state()
-        self.ai_explanation = explanation
-        self.llm_message = explanation
+        self.llm_response = explanation
+        self.llm_error = ""
         if has_query:
             self.extracted_query = extracted_query
             self.has_extracted_query = True
 
     # ==== QUERY PROCESSING ====
     
-    def execute_query(self, query: str) -> Tuple[bool, str, Any]:
+    def execute_query(self, query: str):
         """
         Execute a TempoQL query with comprehensive error handling.
         
@@ -209,75 +200,55 @@ class TempoQLWidget(anywidget.AnyWidget):
         if not self.query_engine:
             return False, "No query engine available", None
         
-        try:
-            # Reset state
-            self.last_sql_query = None
-            
-            # Execute query
-            print(f"🔍 Executing query: {query}")
-            result = self.query_engine.query(query, return_subqueries=False)
-            self.last_sql_query = self.query_engine.get_last_sql_query()
-            
-            print(f"✅ Query executed successfully")
-            return True, self.last_sql_query or "Query completed", result
-            
-        except Exception as e:
-            error_message = f"Error in query execution: {str(e)}"
-            print(f"❌ {error_message}")
-            return False, error_message, None
-
-    def _process_query_results(self, query: str, result: Any):
-        """Process successful query results and update widget state."""
-        try:
-            # Process subqueries
-            self._process_subqueries(query)
-            
-            # Update main result data
-            self.data = result
-            
-            # Generate result summary
-            try:
-                self.values = make_query_result_summary(result)
-            except Exception as e:
-                print(f"Warning: Error creating values summary: {e}")
-                self._set_default_values()
-                
-        except Exception as e:
-            print(f"Warning: Error processing query results: {e}")
-
-    def _process_subqueries(self, query: str):
-        """Process and summarize subqueries."""
-        try:
-            _, subqueries = self.query_engine.query(query, return_subqueries=True)
-            processed_subqueries = {}
-            
-            if isinstance(subqueries, dict):
-                for key, value in subqueries.items():
-                    if isinstance(value, dict) and 'result' in value:
-                        try:
-                            processed_subqueries[key] = {
-                                'result': make_query_result_summary(value['result'])
-                            }
-                        except Exception as e:
-                            print(f"Warning: Error processing subquery {key}: {e}")
-                            processed_subqueries[key] = {
-                                'result': {'values': {'length': 0, 'type': 'unknown'}}
-                            }
-            
-            self.subqueries = processed_subqueries
-            self.subquery_enabled = len(processed_subqueries) > 0
-            
-        except Exception as e:
-            print(f"Warning: Error getting subqueries: {e}")
-            self.subqueries = {}
-            self.subquery_enabled = False
+        # Reset state
+        self.last_sql_query = None
+        
+        # Execute query
+        self._set_loading(True, "Running query...")
+        result, subqueries = self.query_engine.query(query, return_subqueries=True)
+        
+        # Process successful query
+        self._set_loading(True, "Processing results...")
+        self.data = result
+        self.values = make_query_result_summary(result, self.ids)
+        self.subqueries = {
+            k: {**v, 'result': make_query_result_summary(v['result'], self.ids)}
+            for k, v in subqueries.items()
+        }
+        
+    # ==== HISTORY ====
+    
+    def add_query_to_history(self, query: str):
+        """Adds the given query to the query history."""
+        # Remove any existing entry with the same query
+        history = [
+            item for item in self.query_history if item.get("query") != query
+        ]
+        # Insert the new query at the beginning
+        history.insert(0, {"query": query, 
+                                      "timestamp": datetime.datetime.now().strftime("%m/%d/%Y, %H:%M:%S")})
+        # Trim the list to MAX_HISTORY_ITEMS
+        self.query_history = history[:MAX_HISTORY_ITEMS]
+        
+    def add_ai_question_to_history(self, question: str, answer: str, query: Optional[str]):
+        # Insert the new query at the beginning
+        ai_history = [*self.ai_history]
+        ai_history.insert(0, {"question": question,
+                                "answer": answer or "",
+                                **({"query": query} if query else {}), 
+                                "timestamp": datetime.datetime.now().strftime("%m/%d/%Y, %H:%M:%S")})
+        # Trim the list to MAX_HISTORY_ITEMS
+        self.ai_history = ai_history[:MAX_HISTORY_ITEMS]
 
     # ==== SCOPE ANALYSIS ====
     
     def analyze_scope(self, scope_name: str, force_refresh: bool = False):
         """Analyze a data scope using the ScopeAnalyzer."""
         self._set_loading(True, "Loading scopes...")
-        concepts = self.query_engine.dataset.list_names(scope=scope_name, return_counts=True)
+        concepts = self.query_engine.dataset.list_names(scope=scope_name, return_counts=True, cache_only=not force_refresh)
+        if not len(concepts):
+            self._set_loading(False)
+            return None
         result = {
             'scope_name': scope_name,
             'concept_count': len(concepts),
@@ -289,65 +260,30 @@ class TempoQLWidget(anywidget.AnyWidget):
         self._set_loading(False)
         return result
 
-    # ==== AI ASSISTANT METHODS ====
+    # ==== AI EXPLANATION ====
     
-    def _trigger_ai_explanation(self, query: str):
+    def run_llm_explanation(self):
         """Trigger AI explanation for a successful query."""
         if not (self.ai_assistant and self.ai_assistant.is_available()):
             print("⚠️ AI assistant not available for explanation")
             return
             
-        self._clear_ai_state()
-        self.llm_question = f"Please explain this TempoQL query: {query}"
-        self.llm_mode = "explain"
-        self.llm_trigger = "ask"
         print("🔍 AI explain mode triggered for successful query")
-
-    def _trigger_ai_fix(self, failed_query: str, error_message: str):
-        """Trigger AI fix mode for a failed query."""
-        if not (self.ai_assistant and self.ai_assistant.is_available()):
-            print("⚠️ AI assistant not available for query fixing")
-            self._set_ai_error(error_message)
-            return
+        try:            
+            self._set_loading(True, "Explaining query...")
             
-        print(f"🔧 Triggering AI fix mode for failed query")
-        print(f"🔧 Failed query: {failed_query}")
-        print(f"🔧 Error: {error_message}")
-        
-        self._clear_ai_state()
-        self.llm_loading = True
-        
-        try:
-            # Show analyzing error stage
-            self._set_loading(True, "Analyzing error...")
-            
-            # Call AI assistant in fix mode
-            self._set_loading(True, "Generating fix...")
-            response_data = self.ai_assistant.process_question(
-                question="Please fix this failed TempoQL query",
-                mode="fix",
-                failed_query=failed_query,
-                error_message=error_message
-            )
+            # Process AI question
+            response_data = self.ai_assistant.process_question(explain=True, query=self.query_for_results, query_error=self.query_error)
             
             if response_data.get('error', False):
-                error_msg = response_data.get('explanation', 'Failed to fix query')
-                print(f"❌ AI fix failed: {error_msg}")
-                self._set_ai_error(f"Failed to fix query: {error_msg}")
+                self.llm_explanation = response_data.get('explanation', 'An error occurred while explaining your query. Please try again.')
             else:
-                explanation = response_data.get('explanation', '')
-                extracted_query = response_data.get('extracted_query', '')
-                has_query = response_data.get('has_query', False)
-                
-                print(f"✅ AI fix completed. Has fixed query: {has_query}")
-                self._set_ai_success(explanation, extracted_query, has_query)
+                self.llm_explanation = response_data.get('explanation', '')
                 
         except Exception as e:
-            error_msg = f"Error during AI fix: {str(e)}"
-            print(f"❌ {error_msg}")
-            self._set_ai_error(error_msg)
+            self.llm_explanation = f"An error occurred while explaining your query: {str(e)}"
         finally:
-            self.llm_loading = False
+            self._set_loading(False)  # Clear loading state
 
     # ==== TRAITLET OBSERVERS ====
     
@@ -358,45 +294,37 @@ class TempoQLWidget(anywidget.AnyWidget):
             return
             
         query = self.text_input.strip()
+        self.query_for_results = query
+        self.query_error = ""
+        self.llm_explanation = ""
         print(f"🔍 Processing query: {query}")
         
         try:
             self._set_loading(True, "Checking query...")
-            
-            # Execute query with error handling
-            success, message, result = self.execute_query(query)
-            self.message = message
-            
-            if success:
-                # Process successful query
-                print(f"✅ Query succeeded")
-                self._set_loading(True, "Processing results...")
-                self._process_query_results(query, result)
-                self._set_loading(True, "Generating explanation...")
-                self._trigger_ai_explanation(query)
-            else:
-                # Handle query error - trigger AI fix mode
-                print(f"❌ Query failed: {message}")
-                self._set_loading(True, "Fixing query...")
-                self._trigger_ai_fix(query, message)
-                
+            self.execute_query(query)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             print(f"❌ Unexpected error: {error_msg}")
-            self.message = error_msg
-            # For unexpected errors, also try AI fix if possible
-            self._set_loading(True, "Attempting to fix error...")
-            self._trigger_ai_fix(query, error_msg)
+            self.query_error = error_msg
+            self.values = {}
+            self.data = None
+            raise e
         finally:
             self._set_loading(False)
             self.process_trigger = ""
+            self.add_query_to_history(query)
 
     @traitlets.observe('llm_trigger')
     def _on_llm_trigger(self, change):
         """Handle AI assistant trigger from frontend (Ask button)."""
         if not change['new']:
             return
-            
+        
+        if change['new'] == 'explain':
+            self.run_llm_explanation()
+            self.llm_trigger = ''
+            return
+        
         question = self.llm_question.strip()
         if not question:
             self._set_ai_error("No question provided")
@@ -408,16 +336,10 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._clear_ai_state()
             
             # Show appropriate loading message based on mode
-            mode = self.llm_mode or "generate"
-            if mode == "generate":
-                self._set_loading(True, "Generating query...")
-            elif mode == "explain":
-                self._set_loading(True, "Explaining query...")
-            else:
-                self._set_loading(True, "Processing request...")
+            self._set_loading(True, "Generating...")
             
             # Process AI question
-            response_data = self.ai_assistant.process_question(question, mode=mode)
+            response_data = self.ai_assistant.process_question(question=question, query=self.text_input.strip())
             
             if response_data.get('error', False):
                 self.llm_error = response_data.get('explanation', 'Unknown error')
@@ -427,13 +349,17 @@ class TempoQLWidget(anywidget.AnyWidget):
                 has_query = response_data.get('has_query', False)
                 
                 self._set_ai_success(explanation, extracted_query, has_query)
-                
+
         except Exception as e:
+            traceback.print_exc()
             self.llm_error = f"Error: {str(e)}"
             self._clear_ai_state()
         finally:
             self._set_loading(False)  # Clear loading state
-            self._reset_llm_state()
+            self.llm_trigger = ''
+            self.llm_loading = False
+            self.add_ai_question_to_history(question, self.llm_response, self.extracted_query or None)
+
 
     @traitlets.observe('scope_analysis_trigger')
     def _on_scope_analysis_trigger(self, change):
@@ -455,13 +381,15 @@ class TempoQLWidget(anywidget.AnyWidget):
                 self.scope_concepts = analysis_result
                 concept_count = len(analysis_result.get('concepts', []))
                 print(f"✅ Found {concept_count} concepts in {scope_name}")
-            else:
+            elif force_refresh:
                 self.scope_concepts = {
                     'scope_name': scope_name,
                     'concept_count': 0,
                     'concepts': [],
                     'error': 'No data found for this scope'
                 }
+            else:
+                self.scope_concepts = {}
                 
         except Exception as e:
             print(f"❌ Error analyzing scope {scope_name}: {e}")
@@ -480,8 +408,3 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.llm_loading = False
         self.llm_trigger = ""
         self.llm_question = ""
-        self.llm_mode = "generate"
-
-
-# Backward compatibility alias
-Widget = TempoQLWidget

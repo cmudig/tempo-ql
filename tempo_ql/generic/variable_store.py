@@ -307,7 +307,7 @@ class FileVariableStore:
         """
         Check if the variable store contains the given variable.
         """
-        return variable_name in self.var_metadata
+        return variable_name in self.var_metadata and os.path.exists(self._get_variable_path(variable_name))
         
     def __getitem__(self, variable_name):
         """
