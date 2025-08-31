@@ -11,6 +11,7 @@ export interface SliceMetric {
   share?: number;
   count?: number;
   total?: number;
+  unit?: string;
   hist?: Histogram;
   counts?: { [key: string]: number };
 }

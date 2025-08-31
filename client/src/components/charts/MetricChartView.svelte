@@ -46,7 +46,8 @@
   {:else if values.type == 'continuous'}
     <SliceMetricHistogram
       histValues={values.hist}
-      mean={values.mean ?? 0}
+      mean={values.mean}
+      unit={values.unit ?? null}
       width={null}
     />
   {:else if values.type == 'categorical'}

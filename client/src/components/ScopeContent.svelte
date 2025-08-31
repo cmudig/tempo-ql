@@ -132,9 +132,19 @@
           .map((c) => "'" + c.name + "'");
         onInsert(scopeName, `name in (${names.join(', ')})`);
       } else {
-        let ids = concepts
-          .filter((c) => selectedConceptIDs.has(c.id))
-          .map((c) => `${c.id}`);
+        let ids;
+        if (
+          concepts.some(
+            (c) => typeof c.id === 'string' && Number.isNaN(parseFloat(c.id))
+          )
+        )
+          ids = concepts
+            .filter((c) => selectedConceptIDs.has(c.id))
+            .map((c) => `'${c.id}'`);
+        else
+          ids = concepts
+            .filter((c) => selectedConceptIDs.has(c.id))
+            .map((c) => `${c.id}`);
         onInsert(scopeName, `id in (${ids.join(', ')})`);
       }
     }}
@@ -379,6 +389,11 @@
                   on:click={() => {
                     if (queryByName)
                       onInsert(scopeName, `name = '${concept.name}'`);
+                    else if (
+                      typeof concept.id === 'string' &&
+                      Number.isNaN(parseFloat(concept.id))
+                    )
+                      onInsert(scopeName, `id = '${concept.id}'`);
                     else onInsert(scopeName, `id = ${concept.id}`);
                   }}
                 >

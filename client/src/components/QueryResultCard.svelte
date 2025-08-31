@@ -26,7 +26,7 @@
   }
 
   const formatNumber = d3.format(',');
-  const formatPercent = d3.format('.1~%');
+  const formatPercent = d3.format('.2~%');
 
   $: console.log('values', values);
 </script>

@@ -3,54 +3,93 @@ import numpy as np
 import sys
 from .data_types import *
 
+def select_time_unit(seconds_range):
+    if seconds_range >= 365 * 24 * 3600:
+        freq = 'Y'
+        unit = 'yr'
+        format = '%Y'
+        seconds_amount = 365 * 24 * 3600
+    elif seconds_range >= 24 * 3600:
+        freq = 'D'
+        unit = 'd'
+        format = '%Y-%m-%d'
+        seconds_amount = 24 * 3600
+    elif seconds_range >= 3600:
+        freq = 'H'
+        unit = 'hr'
+        format = '%Y-%m-%d %H:%M'
+        seconds_amount = 3600
+    elif seconds_range >= 60:
+        freq = 'T'
+        unit = 'min'
+        format = '%Y-%m-%d %H:%M'
+        seconds_amount = 60
+    else:
+        freq = 'S'
+        unit = 'sec'
+        format = '%Y-%m-%d %H:%M:%S'
+        seconds_amount = 1
+    return freq, format, unit, seconds_amount
+
 def compute_histogram(values):
-        # Handle empty or invalid input
-        if len(values) == 0:
-            return {}
-        
-        min_val = values.min()
-        max_val = values.max()
-        
-        # Handle case where all values are the same
-        if min_val == max_val:
-            if min_val == 0:
-                hist_bins = np.arange(0, 5)
-            else:
-                hist_bins = np.arange(min_val - 2, max_val + 3)
-        else:
-            data_range = max_val - min_val
-            if data_range <= 0:
-                return {}
-            
-            bin_scale = np.floor(np.log10(data_range))
-            if bin_scale < -10 or bin_scale > 10:  # Prevent extreme values
-                return {}
-            
-            if data_range / (10 ** bin_scale) < 2.5:
-                bin_scale -= 1 # Make sure there aren't only 2-3 bins
-            
-            upper_tol = 2 if (np.ceil(max_val / (10 ** bin_scale))) * (10 ** bin_scale) == max_val else 1
-            subdivide = 2 if data_range / (10 ** bin_scale) < 5 else 1
-            
-            start_bin = np.floor(min_val / (10 ** bin_scale)) * (10 ** bin_scale)
-            end_bin = (np.ceil(max_val / (10 ** bin_scale)) + upper_tol) * (10 ** bin_scale)
-            step = 10 ** bin_scale / subdivide
-            
-            # Prevent invalid arange parameters
-            if step <= 0 or end_bin <= start_bin:
-                return {}
-            
-            hist_bins = np.arange(start_bin, end_bin, step)
-        
-        # Ensure we have valid bins
+    # Handle empty or invalid input
+    if len(values) == 0:
+        return {}
+    
+    min_val = values.min()
+    max_val = values.max()
+    
+    if pd.api.types.is_datetime64_dtype(values.dtype):
+        # Choose appropriate bin unit based on range
+        total_seconds = (max_val - min_val).total_seconds()
+        freq, format, _, _ = select_time_unit(total_seconds)
+        # Create bins using pandas date_range
+        hist_bins = pd.date_range(start=min_val, end=max_val, freq=freq)
         if len(hist_bins) < 2:
+            hist_bins = pd.date_range(start=min_val, end=max_val, periods=2)
+        bin_counts = pd.cut(values, bins=hist_bins).value_counts(sort=False)
+        return {f"{index.left.strftime(format)} - {index.right.strftime(format)}": count for index, count in bin_counts.items()}
+    
+    elif min_val == max_val:
+        # Handle case where all values are the same
+        if min_val == 0:
+            hist_bins = np.arange(0, 5)
+        else:
+            hist_bins = np.arange(min_val - 2, max_val + 3)
+    else:
+        data_range = max_val - min_val
+        if data_range <= 0:
             return {}
         
-        try:
-            histogram_result = np.histogram(values, bins=hist_bins)
-            return dict(zip(hist_bins.astype(float).tolist(), histogram_result[0].astype(int).tolist()))
-        except Exception:
-            return {} 
+        bin_scale = np.floor(np.log10(data_range))
+        if bin_scale < -10 or bin_scale > 10:  # Prevent extreme values
+            return {}
+        
+        if data_range / (10 ** bin_scale) < 2.5:
+            bin_scale -= 1 # Make sure there aren't only 2-3 bins
+        
+        upper_tol = 2 if (np.ceil(max_val / (10 ** bin_scale))) * (10 ** bin_scale) == max_val else 1
+        subdivide = 2 if data_range / (10 ** bin_scale) < 5 else 1
+        
+        start_bin = np.floor(min_val / (10 ** bin_scale)) * (10 ** bin_scale)
+        end_bin = (np.ceil(max_val / (10 ** bin_scale)) + upper_tol) * (10 ** bin_scale)
+        step = 10 ** bin_scale / subdivide
+        
+        # Prevent invalid arange parameters
+        if step <= 0 or end_bin <= start_bin:
+            return {}
+        
+        hist_bins = np.arange(start_bin, end_bin, step)
+    
+    # Ensure we have valid bins
+    if len(hist_bins) < 2:
+        return {}
+    
+    try:
+        histogram_result = np.histogram(values, bins=hist_bins)
+        return dict(zip(hist_bins.astype(float).tolist(), histogram_result[0].astype(int).tolist()))
+    except Exception:
+        return {} 
 
 def make_series_summary(values, value_type=None):
 
@@ -76,6 +115,7 @@ def make_series_summary(values, value_type=None):
         except:
             is_quantitative = False
         if is_binary: value_type = "binary"
+        elif is_datetime_or_timedelta(values.dtype): value_type = "continuous"
         elif not is_quantitative or (isinstance(values.dtype, pd.CategoricalDtype) or 
                 pd.api.types.is_object_dtype(values.dtype) or 
                 pd.api.types.is_string_dtype(values.dtype)) or ((values.astype(int) == values).all() and num_unique <= 10): value_type = "categorical"
@@ -90,14 +130,12 @@ def make_series_summary(values, value_type=None):
         summary["counts"] = {str(uniques[i]): int(counts[i]) for i in uniques_to_show}
     else:
         if pd.api.types.is_timedelta64_dtype(values.dtype):
-            summary["unit"] = "seconds"
-            values = values.dt.total_seconds()
-        elif pd.api.types.is_datetime64_dtype(values.dtype):
-            # TODO
-            summary["unit"] = "seconds since first time"
-            values = (values - values.min()).dt.total_seconds()
-        summary["mean"] = np.mean(values.astype(float))
-        summary["std"] = np.std(values.astype(float))
+            _, _, unit, seconds = select_time_unit(values.max().total_seconds() - values.min().total_seconds())
+            summary["unit"] = unit
+            values = values.dt.total_seconds() / seconds
+        if not is_datetime_or_timedelta(values.dtype):
+            summary["mean"] = np.mean(values.astype(float))
+            summary["std"] = np.std(values.astype(float))
         summary["hist"] = compute_histogram(values)
     return summary
 

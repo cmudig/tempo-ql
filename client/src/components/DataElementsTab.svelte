@@ -28,19 +28,19 @@
 <div class="flex h-full {width} overflow-hidden">
   <!-- Left Sidebar -->
   <div
-    class="w-1/4 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex-shrink-0"
+    class="w-1/4 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex-shrink-0 h-full flex flex-col"
   >
     <!-- Scopes Header -->
     <h3
-      class="px-4 py-3 font-semibold uppercase text-gray-900 dark:text-gray-100"
+      class="px-4 py-3 font-semibold uppercase text-gray-900 dark:text-gray-100 shrink-0"
     >
       Scopes
     </h3>
 
     <!-- Scopes Content -->
-    <div class="px-4">
+    <div class="px-4 min-h-0 overflow-auto">
       {#if scopes.length > 0}
-        <div class="space-y-1">
+        <div class="space-y-1 pb-4">
           {#each scopes as scope}
             <button
               class="w-full text-left px-3 py-2 rounded-md text-sm transition-colors duration-200 {selectedScope ===
