@@ -5,11 +5,13 @@
   // Import all modular components
   import TabBar from './components/TabBar.svelte';
   import DataElementsTab from './components/DataElementsTab.svelte';
-  import QueryInspectorTab from './components/QueryInspectorTab.svelte';
+  import QueryResultsTab from './components/QueryResultsTab.svelte';
   import StatusFooter from './components/StatusFooter.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
   import LoadingBar from './components/LoadingBar.svelte';
   import HistoryDropdown from './components/HistoryDropdown.svelte';
+  import TextInputCard from './components/TextInputCard.svelte';
+  import AiAssistantSection from './components/AIAssistantSection.svelte';
 
   export let model;
 
@@ -50,7 +52,7 @@
   $: dataFields = $listNames || [];
 
   // Tab state
-  let activeTab = 'query-inspector';
+  let activeTab = 'data-elements';
 
   // History dropdown state
   let showAIHistoryDropdown = false;
@@ -80,6 +82,7 @@
     if ($textInput.trim()) {
       runQuery($textInput);
     }
+    activeTab = 'results';
   }
 
   // Handle history button click - toggle dropdown
@@ -135,58 +138,86 @@
 </script>
 
 <main
-  class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex flex-col"
+  class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex"
   style="height: 600px;"
 >
-  <!-- Tab Bar -->
-  <TabBar {activeTab} onTabChange={handleTabChange} />
-
-  <!-- Tab Content -->
-  <div class="flex-auto w-full min-h-0 z-0">
-    {#if activeTab === 'data-elements'}
-      <DataElementsTab
-        width="w-full"
-        scopes={$scopes}
-        bind:selectedScope
-        scopeConcepts={$scopeConcepts}
-        isLoading={$isLoading}
-        loadingMessage={$loadingMessage}
-        onScopeSelect={(scope) => {
-          handleScopeAnalysis(scope, false);
-        }}
-        onAnalyzeScope={(scope) => {
-          handleScopeAnalysis(scope, true);
-        }}
-        onInsert={(scope, selection) => {
-          $textInput = $textInput + `{${selection}; scope = ${scope}}`;
-          activeTab = 'query-inspector';
-        }}
-      />
-    {:else if activeTab === 'query-inspector'}
-      <QueryInspectorTab
-        bind:textInput={$textInput}
-        bind:aiQuestion={currentQuestion}
+  <div class="w-1/2 shrink-0 flex flex-col h-full">
+    <!-- Text Input Card -->
+    <div class="shrink h-3/4">
+      <TextInputCard
+        bind:value={$textInput}
         {dataFields}
         onRun={handleRun}
         onExplain={handleLLMExplanation}
-        queryError={$queryError}
-        values={$values}
-        subqueries={$subqueries}
-        onLLMSubmit={handleLLMQuestionSubmit}
-        llmResponse={$llmResponse}
-        llmLoading={$llmLoading}
-        llmError={$llmError}
-        llmAvailable={$llmAvailable}
-        apiStatus={$apiStatus}
-        extractedQuery={$extractedQuery}
-        llmExplanation={$llmExplanation}
-        hasExtractedQuery={$hasExtractedQuery}
-        onQueryExtracted={handleQueryExtraction}
-        onHistoryClick={handleHistoryClick}
-        onQueryHistoryClick={handleQueryHistoryClick}
+        onHistoryClick={handleQueryHistoryClick}
         width="w-full"
       />
+    </div>
+
+    {#if $llmAvailable}
+      <!-- AI Assistant Section with scrollable area -->
+      <div class="w-full h-1/2 overflow-hidden">
+        <AiAssistantSection
+          onSubmit={handleLLMQuestionSubmit}
+          llmResponse={$llmResponse}
+          isLoading={$llmLoading}
+          error={$llmError}
+          apiStatus={$apiStatus}
+          width="w-full"
+          scrollable={true}
+          extractedQuery={$extractedQuery}
+          hasExtractedQuery={$hasExtractedQuery}
+          onQueryExtracted={handleQueryExtraction}
+          onHistoryClick={handleHistoryClick}
+          bind:question={currentQuestion}
+          onRun={(text) => {
+            $textInput = text;
+            handleRun();
+          }}
+        />
+      </div>
     {/if}
+  </div>
+
+  <div
+    class="w-1/2 h-full rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"
+  >
+    <!-- Tab Bar -->
+    <TabBar {activeTab} onTabChange={handleTabChange} />
+
+    <!-- Tab Content -->
+    <div class="flex-auto w-full min-h-0 z-0">
+      {#if activeTab === 'results'}
+        <QueryResultsTab
+          bind:textInput={$textInput}
+          onRun={handleRun}
+          onExplain={handleLLMExplanation}
+          queryError={$queryError}
+          values={$values}
+          subqueries={$subqueries}
+          llmAvailable={$llmAvailable}
+          llmExplanation={$llmExplanation}
+          width="w-full"
+        />
+      {:else if activeTab === 'data-elements'}
+        <DataElementsTab
+          scopes={$scopes}
+          bind:scopeName={selectedScope}
+          scopeConcepts={$scopeConcepts}
+          isLoading={$isLoading}
+          loadingMessage={$loadingMessage}
+          onScopeSelect={(scope) => {
+            handleScopeAnalysis(scope, false);
+          }}
+          onAnalyze={() => {
+            handleScopeAnalysis(selectedScope, true);
+          }}
+          onInsert={(scope, selection) => {
+            $textInput = $textInput + `{${selection}; scope = ${scope}}`;
+          }}
+        />
+      {/if}
+    </div>
   </div>
 
   <!-- History Dropdown Component -->
