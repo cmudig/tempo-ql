@@ -39,7 +39,7 @@
   <!-- Left side: Text Input Card and AI Assistant stacked -->
   <div class="w-1/2 shrink-0 flex flex-col h-full">
     <!-- Text Input Card -->
-    <div class="flex-auto">
+    <div class="shrink h-2/3">
       <TextInputCard
         bind:value={textInput}
         {dataFields}

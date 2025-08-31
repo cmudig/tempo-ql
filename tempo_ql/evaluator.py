@@ -71,7 +71,7 @@ CUT_TYPE: /bins?/i|/quantiles?/i
     | comparison "NOT"i "IN"i value_list            -> isnotin
     | agg_expr
 
-?agg_expr: agg_method expr time_bounds
+?agg_expr: agg_method expr time_bounds // time_bounds is non-optional because otherwise agg_method can be ambiguous, e.g. `first time({event})`
     | sum
 
 ?sum: sum "+" product                       -> expr_add
@@ -98,6 +98,8 @@ atom: VAR_NAME OPENPAREN expr (COMMA expr)* CLOSEPAREN                 -> functi
     | INDEXVALUE                            -> index_value
     | CASE (case_when)+ ELSE expr END -> case_expr     // if/else
     | expr "AS"i UNIT                      -> unit_expr
+    | expr EXISTS                           -> exists_expr
+    | expr NOTEXISTS                           -> not_exists_expr
     | OPENPAREN expr CLOSEPAREN            -> paren_expr
     | VAR_NAME                               -> var_name
 
@@ -123,6 +125,8 @@ INDEXVALUE: "#INDEXVALUE"i
 CASE: "CASE"i
 END: "END"i
 ELSE: "ELSE"i
+EXISTS: "EXISTS"i
+NOTEXISTS: "DOES NOT EXIST"i
 EVERY: "EVERY"i
 ATEVERY: "AT EVERY"i
 AT: "AT"i
@@ -302,7 +306,6 @@ class EvaluateQuery(lark.visitors.Interpreter):
         # then process external variables in order
         if self.variable_stores is not None:
             for store in self.variable_stores:
-                print("Checking store", store, var_name)
                 if var_name in store: return self._log_subquery(tree, store[var_name])
         raise KeyError(f"No variable named {var_name}")
         
@@ -352,17 +355,26 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 else:
                     start = TimeIndex.from_attributes(start)
                     end = TimeIndex.from_attributes(end)
-            elif isinstance(start, Attributes) and not isinstance(end, Attributes):
-                if self.time_index is not None:
+            elif isinstance(start, TimeSeries) and isinstance(end, TimeSeries) and self.time_index is None:
+                if len(start) != len(end):
+                    raise ValueError("Mismatched lengths for time series used in time bounds")
+                start = start.index.with_times(start.get_values())
+                end = end.index.with_times(end.get_values())
+            elif isinstance(start, (Attributes, TimeSeries)) and not isinstance(end, type(start)):
+                if self.time_index is not None and isinstance(start, Attributes):
                     start = self.time_index.with_times(make_aligned_value_series(self.time_index, start))
-                else:
+                elif isinstance(start, Attributes):
                     start = TimeIndex.from_attributes(start)
+                elif isinstance(start, TimeSeries):
+                    start = start.index.with_times(start.get_values())
                 end = start.with_times(make_aligned_value_series(start, end))
-            elif isinstance(end, Attributes) and not isinstance(start, Attributes):
-                if self.time_index is not None:
+            elif isinstance(end, (Attributes, TimeSeries)) and not isinstance(start, type(end)):
+                if self.time_index is not None and isinstance(end, Attributes):
                     end = self.time_index.with_times(make_aligned_value_series(self.time_index, end))
-                else:
+                elif isinstance(end, Attributes):
                     end = TimeIndex.from_attributes(end)
+                elif isinstance(end, TimeSeries):
+                    end = end.index.with_times(end.get_values())
                 start = end.with_times(make_aligned_value_series(end, start))
             new_index = None
             
@@ -482,7 +494,12 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def agg_expr(self, tree):
         agg_method = self.visit(tree.children[0])
         expr = self.visit(tree.children[1])
-        *time_bounds, time_index = self.visit(tree.children[-1])
+        *time_bounds, time_index = self.visit(tree.children[-1]) if tree.children[-1] is not None else self.time_bounds(lark.Tree('time_bounds', [
+            lark.Token('FROM', ''), 
+            lark.Tree('min_time', []),
+            lark.Token('TO', ''), 
+            lark.Tree('max_time', [])
+        ]))
         has_inner_time_index = time_index is not None # if this is true, the return value will be an Events!
         if time_index is None: time_index = self.time_index
         
@@ -564,17 +581,24 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 result = condition.apply(lambda x: pd.NA if pd.isna(x) else (value if x else result))
                 
         return result
+    
+    def exists_expr(self, tree):
+        exp = self.visit(tree.children[0])
+        return exp.with_values(~pd.isna(exp.get_values()))
+        
+    def not_exists_expr(self, tree):
+        return ~self.exists_expr(tree)
         
     def carry_clause(self, tree):
         # Defines how far the values in the time series should be
         # carried forward within a given ID
         var_exp = self.visit(tree.children[0])
         if isinstance(var_exp, Compilable): raise NotImplementedError("Carry forward not yet implemented for nested aggregations")
-        if isinstance(tree.children[-1], lark.Tree) and tree.children[1].data == "step_quantity":
+        if isinstance(tree.children[-1], lark.Tree) and tree.children[-1].data == "step_quantity":
             steps = int(tree.children[-1].children[0].value)
             return var_exp.carry_forward_steps(steps)
         else:
-            return var_exp.carry_forward_duration(tree.children[-1])
+            return var_exp.carry_forward_duration(self.visit(tree.children[-1]))
             
     @lark.v_args(tree=True)
     def step_quantity(self, tree):
@@ -653,6 +677,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 if not hasattr(operands[0], "get_end_times"):
                     raise ValueError("endtime function requires interval objects")
                 return operands[0].end_events().with_values(operands[0].get_end_times())
+        elif function_name == "type":
+            if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
+            return operands[0].with_values(operands[0].get_types())
         elif function_name in ("duration",):
             if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
             return (operands[0].end_events().with_values(operands[0].get_end_times())
@@ -710,6 +737,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
             if not isinstance(operands[0], Events) or not isinstance(operands[1], Events):
                 raise ValueError(f"Both arguments to {function_name} function must be Events")
             return Intervals.from_events(*operands)
+        elif function_name == "assign":
+            if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
+            return operands[0].with_values(make_aligned_value_series(operands[0], operands[1]))
         else:
             raise ValueError(f"Unknown function '{function_name}'")
 
@@ -797,6 +827,8 @@ class EvaluateQuery(lark.visitors.Interpreter):
             else:
                 raise ValueError(f"Unrecognized interval position '{tree.children[1].value}'")
         
+        if isinstance(events, Attributes):
+            events = Events.from_attributes(events)
         if not isinstance(events, Events):
             raise ValueError(f"Expected 'at every' data element to evaluate to an Events object, but instead got '{type(events).__name__}'")
         index, filtered_events = TimeIndex.from_events(events, starts=start_time, ends=end_time, return_filtered_events=True)
@@ -895,20 +927,26 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def time_series(self, tree):
         time_index = self.visit(tree.children[-1]) if len(tree.children) > 1 else None
         self.time_index = time_index
+        if len(tree.children[0].children) == 1:
+            children = tree.children[0].children
+        else:
+            children = tree.children[0].children[1:-1:2]
         if self.update_fn is None:
-            pbar = tqdm.tqdm(tree.children[0].children) if self.verbose else tree.children[0].children
+            pbar = tqdm.tqdm(children) if self.verbose else children
         else:
             def progress_iterable():
-                for i, c in enumerate(tree.children[0].children):
+                for i, c in enumerate(children):
                     yield c
-                    self.update_fn(i + 1, len(tree.children[0].children))
+                    self.update_fn(i + 1, len(children))
             pbar = progress_iterable()
         variable_definitions = [self.visit(child) for child in pbar]
         self.time_index = None
         self.index_value_placeholder = None
 
         if time_index is not None and not all(isinstance(v, TimeSeries) for v in variable_definitions):
-            raise ValueError(f"All variables must evaluate to a TimeSeries when a time index is provided")
+            invalid_vars = [f"{i} ({v})"
+                            for i, v in enumerate(variable_definitions) if not isinstance(v, TimeSeries)]
+            raise ValueError(f"All variables must evaluate to a TimeSeries when a time index is provided. Invalid variables: {', '.join(invalid_vars)}")
         if len(variable_definitions) == 1:
             return variable_definitions[0]
         else:

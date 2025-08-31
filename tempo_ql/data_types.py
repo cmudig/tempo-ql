@@ -25,6 +25,8 @@ def make_aligned_value_series(value_set, other):
     return other
 
 def compress_series(v):
+    if is_datetime_or_timedelta(v.dtype):
+        return v
     if pd.api.types.is_object_dtype(v.dtype) or pd.api.types.is_string_dtype(v.dtype) or isinstance(v.dtype, pd.CategoricalDtype):
         # Convert category types if needed
         if len(v.unique()) < len(v) * 0.5:
@@ -538,7 +540,7 @@ class Attributes(TimeSeriesQueryable):
     
     def filter(self, mask):
         """Returns a new Attributes with only steps for which the mask is True."""
-        if hasattr(mask, "get_values"): mask = mask.get_values()
+        if hasattr(mask, "get_values"): mask = mask.get_values().astype(pd.BooleanDtype()).fillna(False)
         return Attributes(self.series[mask])
         
     def __getattr__(self, name):
@@ -559,7 +561,7 @@ class Attributes(TimeSeriesQueryable):
         raise AttributeError(name)
     
     def preserve_nans(self, new_values):
-        return new_values.where(~pd.isna(self.series), pd.NA)
+        return new_values.convert_dtypes().where(~pd.isna(self.series), pd.NA)
         
     def __abs__(self): return Attributes(self.preserve_nans(self.series.__abs__()))
     def __neg__(self): return Attributes(self.preserve_nans(self.series.__neg__()))
@@ -572,11 +574,7 @@ class Attributes(TimeSeriesQueryable):
         if isinstance(other, Attributes):
             return Attributes(self.preserve_nans(getattr(self.series, opname)(other.series).rename(self.name)))
         if isinstance(other, Duration):
-            if is_datetime_or_timedelta(self.series.dtype):
-                duration = datetime.timedelta(seconds=other.value())
-            else:
-                duration = other.value()
-            return Attributes(self.preserve_nans(getattr(self.series, opname)(duration).rename(self.name)))
+            return Attributes(self.preserve_nans(getattr(self.series, opname)(other.value_like(self.series)).rename(self.name)))
         return Attributes(self.preserve_nans(getattr(self.series, opname)(other)))
         
     def __eq__(self, other): return self._handle_binary_op("__eq__", other)
@@ -630,7 +628,7 @@ class AttributeSet(TimeSeriesQueryable):
     
     def filter(self, mask):
         """Returns a new AttributeSet with only steps for which the mask is True."""
-        if hasattr(mask, "get_values"): mask = mask.get_values()
+        if hasattr(mask, "get_values"): mask = mask.get_values().astype(pd.BooleanDtype()).fillna(False)
         return AttributeSet(self.df[mask])
         
     def has(self, attribute_name): return attribute_name in self.df.columns
@@ -664,6 +662,15 @@ class Events(TimeSeriesQueryable):
         else:
             self.name = name
         
+    @staticmethod
+    def from_attributes(attributes, id_field="id"):
+        """Creates an events object from the timesteps and IDs represented in the given
+        Attributes object (one per ID)"""
+        attribute_df = pd.DataFrame({id_field: attributes.series.index, attributes.name: attributes.series.reset_index(drop=True), 'eventtype': attributes.name, 'value': pd.NA})
+        return Events(attribute_df, 
+                         id_field=id_field, 
+                         time_field=attributes.name)
+        
     def serialize(self):
         return {
             "type": "Events", 
@@ -688,7 +695,7 @@ class Events(TimeSeriesQueryable):
     
     def filter(self, mask):
         """Returns a new Events with only steps for which the mask is True."""
-        if hasattr(mask, "get_values"): mask = mask.get_values().astype(bool)
+        if hasattr(mask, "get_values"): mask = mask.get_values().astype(pd.BooleanDtype()).fillna(False)
         return Events(self.df[mask].reset_index(drop=True),
                       type_field=self.type_field,
                       time_field=self.time_field,
@@ -708,7 +715,7 @@ class Events(TimeSeriesQueryable):
     def get_values(self): return self.df[self.value_field]
     
     def preserve_nans(self, new_values):
-        return new_values.where(~pd.isna(self.get_values()), pd.NA)
+        return new_values.convert_dtypes().where(~pd.isna(self.get_values()), pd.NA)
         
     def __getattr__(self, name):
         value_series = self.df[self.value_field]
@@ -738,9 +745,9 @@ class Events(TimeSeriesQueryable):
     def prepare_aggregation_inputs(self, agg_func, convert_to_categorical=True):
         event_ids = self.df[self.id_field]
         if is_datetime_or_timedelta(self.df[self.time_field].dtype):
-            event_times = (self.df[self.time_field].astype(int)/ 10**9).astype(np.float64)
+            event_times = (self.df[self.time_field].astype('datetime64[ns]').astype(int)/ 10**9).astype(np.int64)
         else:
-            event_times = self.df[self.time_field].astype(np.float64)
+            event_times = self.df[self.time_field].astype(np.int64)
 
         event_values = self.df[self.value_field]
         if convert_to_categorical and (
@@ -751,6 +758,14 @@ class Events(TimeSeriesQueryable):
                 raise ValueError(f"Cannot use agg_func {agg_func} on categorical data")
             event_values, uniques = pd.factorize(event_values)
             event_values = np.where(pd.isna(event_values), np.nan, event_values).astype(np.float64)
+        elif convert_to_categorical and is_datetime_or_timedelta(event_values.dtype):
+            if pd.api.types.is_datetime64_dtype(event_values.dtype):
+                reference_time = event_values.min()
+                event_values = (event_values - reference_time).dt.total_seconds().values
+                uniques = reference_time
+            elif pd.api.types.is_timedelta64_dtype(event_values.dtype):
+                event_values = event_values.dt.total_seconds().values
+                uniques = 'timedelta'
         elif convert_to_categorical:
             event_values = event_values.values.astype(np.float64)
             uniques = None
@@ -776,12 +791,12 @@ class Events(TimeSeriesQueryable):
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
         if (is_datetime_or_timedelta(start_times.get_times().dtype) and
             is_datetime_or_timedelta(end_times.get_times().dtype) and
-            is_datetime_or_timedelta(self.df[self.time_field].dtype)):
-            starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
-            ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
+            (not len(self.df) or is_datetime_or_timedelta(self.df[self.time_field].dtype))):
+            starts = np.array(start_times.get_times().astype('datetime64[ns]').astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype('datetime64[ns]').astype(int) / 10**9, dtype=np.int64)
         elif (not is_datetime_or_timedelta(start_times.get_times().dtype) and
             not is_datetime_or_timedelta(end_times.get_times().dtype) and
-            not is_datetime_or_timedelta(self.df[self.time_field].dtype)):
+            (not len(self.df) or not is_datetime_or_timedelta(self.df[self.time_field].dtype))):
             starts = np.array(start_times.get_times(), dtype=np.int64)
             ends = np.array(end_times.get_times(), dtype=np.int64)
         else:
@@ -800,10 +815,15 @@ class Events(TimeSeriesQueryable):
         grouped_values = convert_numba_result_dtype(grouped_values, agg_func)
         
         if uniques is not None and agg_func in TYPE_PRESERVING_AGG_FUNCTIONS:
-            grouped_values = np.where(np.isnan(grouped_values), 
-                                    np.nan, 
-                                    uniques[np.where(np.isnan(grouped_values), -1, grouped_values).astype(int)])
-        
+            if isinstance(uniques, datetime.datetime):
+                grouped_values = uniques + pd.to_timedelta(grouped_values, unit='s')
+            elif isinstance(uniques, str) and uniques == 'timedelta':
+                grouped_values = pd.to_timedelta(grouped_values, unit='s')
+            else:
+                grouped_values = np.where(np.isnan(grouped_values), 
+                                        np.nan, 
+                                        uniques[np.where(np.isnan(grouped_values), -1, grouped_values).astype(int)])
+            
         assert len(grouped_values) == len(index)
         return TimeSeries(index, pd.Series(grouped_values, name=self.name).convert_dtypes())
         
@@ -906,7 +926,7 @@ class EventSet(TimeSeriesQueryable):
     
     def filter(self, mask):
         """Returns a new EventSet with only steps for which the mask is True."""
-        if hasattr(mask, "get_values"): mask = mask.get_values().astype(bool)
+        if hasattr(mask, "get_values"): mask = mask.get_values().astype(pd.BooleanDtype()).fillna(False)
         return EventSet(self.df[mask].reset_index(drop=True),
                       type_field=self.type_field,
                       time_field=self.time_field,
@@ -1048,7 +1068,7 @@ class Intervals(TimeSeriesQueryable):
         return f"<Intervals '{self.name}': {len(self.df)} values>\n{repr(self.df)}"
     
     def preserve_nans(self, new_values):
-        return new_values.where(~pd.isna(self.get_values()), pd.NA)
+        return new_values.convert_dtypes().where(~pd.isna(self.get_values()), pd.NA)
         
     def shift(self, offset):
         """Shifts the interval values by the given number of steps, reversed from Pandas, i.e.
@@ -1085,8 +1105,8 @@ class Intervals(TimeSeriesQueryable):
         event_ids = self.df[self.id_field]
         if (is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
             is_datetime_or_timedelta(self.df[self.end_time_field].dtype)):
-            interval_starts = (self.df[self.start_time_field].astype(int) / 10**9).astype(np.float64)
-            interval_ends = (self.df[self.end_time_field].astype(int) / 10**9).astype(np.float64)
+            interval_starts = (self.df[self.start_time_field].astype('datetime64[ns]').astype(int) / 10**9).astype(np.float64)
+            interval_ends = (self.df[self.end_time_field].astype('datetime64[ns]').astype(int) / 10**9).astype(np.float64)
         else:
             interval_starts = self.df[self.start_time_field].astype(np.float64)
             interval_ends = self.df[self.end_time_field].astype(np.float64)
@@ -1100,6 +1120,14 @@ class Intervals(TimeSeriesQueryable):
                 raise ValueError(f"Cannot use agg_func {agg_func} on categorical data")
             interval_values, uniques = pd.factorize(interval_values)
             interval_values = np.where(pd.isna(interval_values), np.nan, interval_values).astype(np.float64)
+        elif convert_to_categorical and is_datetime_or_timedelta(interval_values.dtype):
+            if pd.api.types.is_datetime64_dtype(interval_values.dtype):
+                reference_time = interval_values.min()
+                interval_values = (interval_values - reference_time).dt.total_seconds()
+                uniques = reference_time
+            elif pd.api.types.is_timedelta64_dtype(interval_values.dtype):
+                interval_values = interval_values.dt.total_seconds()
+                uniques = 'timedelta'
         elif convert_to_categorical:
             interval_values = interval_values.values.astype(np.float64)
             uniques = None
@@ -1127,14 +1155,14 @@ class Intervals(TimeSeriesQueryable):
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
         if (is_datetime_or_timedelta(start_times.get_times().dtype) and
             is_datetime_or_timedelta(end_times.get_times().dtype) and
-            is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
-            is_datetime_or_timedelta(self.df[self.end_time_field].dtype)):
-            starts = np.array(start_times.get_times().astype(int) / 10**9, dtype=np.int64)
-            ends = np.array(end_times.get_times().astype(int) / 10**9, dtype=np.int64)
+            (not len(self.df) or (is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
+            is_datetime_or_timedelta(self.df[self.end_time_field].dtype)))):
+            starts = np.array(start_times.get_times().astype('datetime64[ns]').astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype('datetime64[ns]').astype(int) / 10**9, dtype=np.int64)
         elif (not is_datetime_or_timedelta(start_times.get_times().dtype) and
             not is_datetime_or_timedelta(end_times.get_times().dtype) and
-            not is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
-            not is_datetime_or_timedelta(self.df[self.end_time_field].dtype)):
+            (not len(self.df) or (not is_datetime_or_timedelta(self.df[self.start_time_field].dtype) and
+            not is_datetime_or_timedelta(self.df[self.end_time_field].dtype)))):
             starts = np.array(start_times.get_times(), dtype=np.int64)
             ends = np.array(end_times.get_times(), dtype=np.int64)
         else:
@@ -1156,9 +1184,14 @@ class Intervals(TimeSeriesQueryable):
         grouped_values = convert_numba_result_dtype(grouped_values, agg_func)
         
         if uniques is not None and agg_func in TYPE_PRESERVING_AGG_FUNCTIONS:
-            grouped_values = np.where(np.isnan(grouped_values), 
-                                    np.nan, 
-                                    uniques[np.where(np.isnan(grouped_values), -1, grouped_values).astype(int)])
+            if isinstance(uniques, datetime.datetime):
+                grouped_values = uniques + pd.to_timedelta(grouped_values, unit='s')
+            elif isinstance(uniques, str) and uniques == 'timedelta':
+                grouped_values = pd.to_timedelta(grouped_values, unit='s')
+            else:
+                grouped_values = np.where(np.isnan(grouped_values), 
+                                        np.nan, 
+                                        uniques[np.where(np.isnan(grouped_values), -1, grouped_values).astype(int)])
         
         assert len(grouped_values) == len(index)
         return TimeSeries(index, pd.Series(grouped_values, name=self.name).convert_dtypes())
@@ -1542,7 +1575,7 @@ class TimeIndex(TimeSeriesQueryable):
         return f"<TimeIndex: {len(self.timesteps[self.id_field].unique())} IDs, {len(self.timesteps)} steps>\n{repr(self.timesteps)}"
 
     def preserve_nans(self, new_values):
-        return new_values.where(~pd.isna(self.get_times()), pd.NA)
+        return new_values.convert_dtypes().where(~pd.isna(self.get_times()), pd.NA)
         
     def with_times(self, new_times, preserve_nans=False):
         return TimeIndex(self.timesteps.assign(**{self.time_field: self.preserve_nans(new_times) if preserve_nans else new_times}),
@@ -1652,7 +1685,7 @@ class TimeSeries(TimeSeriesQueryable):
     def filter(self, mask):
         """Returns a new time series with an updated index and values with only
         values for which the mask is True."""
-        if hasattr(mask, "get_values"): mask = mask.get_values().astype(bool)
+        if hasattr(mask, "get_values"): mask = mask.get_values().astype(pd.BooleanDtype()).fillna(False)
         return TimeSeries(self.index.filter(mask), self.series[mask].reset_index(drop=True))
         
     def __len__(self):
@@ -1683,10 +1716,10 @@ class TimeSeries(TimeSeriesQueryable):
         return self.series
     
     def preserve_nans(self, new_values):
-        return new_values.where(~pd.isna(self.get_values()), pd.NA)
+        return new_values.convert_dtypes().where(~pd.isna(self.get_values()), pd.NA)
         
     def with_values(self, new_values, preserve_nans=False):
-        return TimeSeries(self.index, self.preserve_nans(new_values) if preserve_nans else new_values)
+        return TimeSeries(self.index, self.preserve_nans(new_values.rename(self.series.name)) if preserve_nans else new_values)
     
     def carry_forward_steps(self, steps):
         """Carries forward by the given number of timesteps."""
@@ -1760,7 +1793,7 @@ class TimeSeries(TimeSeriesQueryable):
         if isinstance(other, TimeSeries):
             return self.with_values(getattr(self.series.reset_index(drop=True), opname)(other.series.reset_index(drop=True)), preserve_nans=True)
         if isinstance(other, Duration):
-            return self.with_values(getattr(self.series, opname)(other.value()), preserve_nans=True)
+            return self.with_values(getattr(self.series, opname)(other.value_like(self.get_values())), preserve_nans=True)
         return self.with_values(getattr(self.series, opname)(other), preserve_nans=True)
         
     def __eq__(self, other): return self._handle_binary_op("__eq__", other)
@@ -1833,7 +1866,7 @@ class TimeSeriesSet:
     def filter(self, mask):
         """Returns a new time series set with an updated index and values with only
         values for which the mask is True."""
-        if hasattr(mask, "get_values"): mask = mask.get_values().astype(bool)
+        if hasattr(mask, "get_values"): mask = mask.get_values().astype(pd.BooleanDtype()).fillna(False)
         return TimeSeriesSet(self.index.filter(mask), self.values[mask].reset_index(drop=True))
         
     @staticmethod
@@ -1843,8 +1876,11 @@ class TimeSeriesSet:
         if len(time_series) == 0:
             raise ValueError("Need at least 1 time series")
         for series in time_series:
-            assert (isinstance(series, TimeSeries) and 
-                    (series.index.get_ids().values == time_series[0].index.get_ids().values).all()), f"TimeSeries must be identically indexed"
+            try:
+                assert (isinstance(series, TimeSeries) and 
+                        (series.index.get_ids().values == time_series[0].index.get_ids().values).all()), f"TimeSeries must be identically indexed"
+            except Exception as e:
+                raise ValueError(f"Cannot align TimeSeries (error with variable {series}): {e}")
         return TimeSeriesSet(time_series[0].index, 
                              pd.DataFrame({series.name or i: series.series for i, series in enumerate(time_series)}))
         

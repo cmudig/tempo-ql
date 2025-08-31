@@ -219,6 +219,13 @@ Output:
 no
 
 Question:
+Please write a query to get diagnosis codes related to heart failure.
+Query text:
+<empty>
+Output:
+no
+
+Question:
 run every day instead of every 5 days
 Query text:
 last {{Weight; scope = Observation}} from #now - 1 day to #now every 5 days

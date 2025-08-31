@@ -51,12 +51,14 @@ The following additional features are available in TempoQL:
 
 You can use the following functions to transform values:
 - time(<Events>): returns a new Events series where the values are the times of each row.
+- type(<Events|Intervals>): returns a new Events or Intervals where the values are the event/interval types (data elements).
 - start(<Intervals>), end(<Intervals>): returns a new Events for either the start time or the end time of the given Intervals
 - starttime(<Intervals>), endtime(<Intervals>), duration(<Intervals>): returns an Events object containing the start times, the end times, or the durations of each interval
 - intervals(<Events>, <Events>): create an Intervals object with the start and end times specified by the two Events objects
 - abs, max, min: standard math functions
 - extract(expr, pattern) or extract(expr, pattern, index): regex extraction
-- union(a, b): combine two sets of Events or Intervals together
+- union(a, b, ...): combine two or more sets of Events or Intervals together
+- assign(expr, value): assign the given value to the elements in the expression, broadcasting if necessary
 
 ---
 

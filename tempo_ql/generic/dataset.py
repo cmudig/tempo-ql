@@ -77,46 +77,46 @@ TRAJECTORY_ID_TABLE_NAME = "tempo_trajectory_ids"
 class GenericDataset:
     def __init__(self, 
                  connection_string, 
-                 tables, 
-                 vocabularies, 
+                 dataset_format, 
                  schema_name=None, 
                  scratch_schema_name='auto', 
                  verbose=False,
-                 id_field_joins=None,
                  id_field_transform=None,
                  time_field_transform=None):
         """
         Args:
         * connection_string: A SQLAlchemy connection string for the database.
-        * tables: A list of dictionaries describing the tables that can be
-            accessed in the database and the types of data they contain.
-        * vocabularies: A list of dictionaries describing the concept mapping 
-            tables that are available.
+        * dataset_format: A DatasetFormat tuple containing (tables, vocabularies, joins).
+            The format should be as follows:
+            * tables: A list of dictionaries describing the tables that can be
+                accessed in the database and the types of data they contain.
+            * vocabularies: A list of dictionaries describing the concept mapping 
+                tables that are available.
+            * id_field_joins: If provided, a dictionary specifying how to join tables
+                with alternative id fields to other tables to achieve a table with the
+                desired id field. The dictionary's keys should be table source names (specified
+                in the tables list) and the values should be dictionaries with the 
+                following keys:
+                * dest_table: A table to join to the source table
+                * join_key: Field that should be joined on in both source and 
+                    destination tables (will be used as both src_join_key and dest_join_key)
+                * src_join_key: Field that should be joined on in the source table 
+                * dest_join_key: Field that should be joined on in the destination
+                    table
+                * keep_fields: Additional fields to keep from the destination table.
+                * join_type: The type of join that should be used ('left', 'inner',
+                    'right', where the left table is the source table). Defaults to
+                    'inner'
+                * where_clause: A lambda function that takes both tables as SQLAlchemy
+                    Table objects and returns a SQLAlchemy expression that will be
+                    used to filter the results. If not provided, no filtering is done.
+                The table that results from the join should contain a field corresponding
+                to the id_field specified in the tables list.
         * schema_name: A schema prefix for the source names in the tables list.
         * scratch_schema_name: Schema to use for tables written by this object
             in the database. If not provided or 'auto', uses the schema_name
             parameter.
         * verbose: Whether to log the database operations as they are performed.
-        * id_field_joins: If provided, a dictionary specifying how to join tables
-            with alternative id fields to other tables to achieve a table with the
-            desired id field. The dictionary's keys should be table source names (specified
-            in the tables list) and the values should be dictionaries with the 
-            following keys:
-            * dest_table: A table to join to the source table
-            * join_key: Field that should be joined on in both source and 
-                destination tables (will be used as both src_join_key and dest_join_key)
-            * src_join_key: Field that should be joined on in the source table 
-            * dest_join_key: Field that should be joined on in the destination
-                table
-            * keep_fields: Additional fields to keep from the destination table.
-            * join_type: The type of join that should be used ('left', 'inner',
-                'right', where the left table is the source table). Defaults to
-                'inner'
-            * where_clause: A lambda function that takes both tables as SQLAlchemy
-                Table objects and returns a SQLAlchemy expression that will be
-                used to filter the results. If not provided, no filtering is done.
-            The table that results from the join should contain a field corresponding
-            to the id_field specified in the tables list.
         * id_field_transform: A SQLAlchemy-compatible function to apply on the
             ID fields. **This will be computed in the database.**
         * time_field_transform: A SQLAlchemy-compatible function to apply on the
@@ -128,8 +128,8 @@ class GenericDataset:
         self.scratch_schema_name = schema_name if scratch_schema_name == 'auto' else scratch_schema_name
         self.connection = self.engine.connect()
         # self.metadata.reflect(bind=self.connection)
-        self.tables = deepcopy(tables)
-        self.vocabularies = deepcopy(vocabularies)
+        self.tables = deepcopy(dataset_format.tables)
+        self.vocabularies = deepcopy(dataset_format.vocabularies)
         self._trajectory_id_table = None # if set, join against this table to limit the trajectory IDs
         self._load_trajectory_id_table()
         self._local_variables = {} # in the future we could have variables stored as temp tables as well
@@ -137,7 +137,7 @@ class GenericDataset:
         self.verbose = verbose
         self.id_field_transform = id_field_transform or (lambda x: x)
         self.time_field_transform = time_field_transform or (lambda x: x)
-        self.id_field_joins = id_field_joins or {}
+        self.id_field_joins = dataset_format.joins or {}
         self._captured_queries = []
         self._name_list_cache = {}
         self._cte_cache = {}
@@ -165,7 +165,7 @@ class GenericDataset:
                       if 'scope' in table_info]))
         
     def __del__(self):
-        if self.connection is not None: self.connection.close()
+        if hasattr(self, "connection") and self.connection is not None: self.connection.close()
         
     def _get_table(self, table_info, limit_columns=None):
         """Attempt to get the SQLAlchemy Table reference from the existing metadata,
@@ -906,6 +906,17 @@ class GenericDataset:
             self.metadata.remove(self._trajectory_id_table)
             self._trajectory_id_table = None
         
+    def get_id_field_type(self):
+        """
+        Return the SQLAlchemy type for the ID field.
+        """
+        # get the ID field type from a random table entry
+        arbitrary_table_info = next((t for t in self.tables if "source" in t and "id_field" in t), None)
+        if not arbitrary_table_info:
+            raise ValueError("No tables have a source and an ID field, cannot infer ID field type")
+        id_field_type = self.id_field_transform(self._get_table(arbitrary_table_info).c[arbitrary_table_info['id_field']]).type
+        return id_field_type
+    
     def set_trajectory_ids(self, trajectory_id_list, batch_size=5000):
         """
         Sets the dataset to only return results for the given set of trajectory
@@ -913,14 +924,10 @@ class GenericDataset:
         """
         self.reset_trajectory_ids()
         
-        # get the ID field type from a random table entry
-        arbitrary_table_info = next((t for t in self.tables if "source" in t and "id_field" in t), None)
-        if not arbitrary_table_info:
-            raise ValueError("No tables have a source and an ID field, cannot infer ID field type")
-        id_field_type = self.id_field_transform(self._get_table(arbitrary_table_info).c[arbitrary_table_info['id_field']]).type
+        id_field_type = self.get_id_field_type()
         self._trajectory_id_table = Table(TRAJECTORY_ID_TABLE_NAME, 
                                           self.metadata,
-                                          Column(TRAJECTORY_ID_TABLE_ID_FIELD, id_field_type, primary_key=True),
+                                          Column(TRAJECTORY_ID_TABLE_ID_FIELD, id_field_type),
                                           schema=self.scratch_schema_name)
         self.metadata.create_all(bind=self.engine, tables=[self._trajectory_id_table])
         with self.engine.connect() as conn:
@@ -929,6 +936,7 @@ class GenericDataset:
                     {TRAJECTORY_ID_TABLE_ID_FIELD: convert_to_native_types(id_val)}
                     for id_val in trajectory_id_list[start_idx:start_idx + batch_size]
                 ]))
+            conn.commit()
             
     def list_names(self, scope=None, return_counts=False, cache_only=False):
         """
