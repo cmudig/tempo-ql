@@ -11360,7 +11360,7 @@ function z0(e) {
     }
   }), {
     c() {
-      t = w("div"), n = w("div"), l = w("div"), Y(r.$$.fragment), o = P(), F && F.c(), f = P(), a = w("div"), O && O.c(), s = P(), D && D.c(), u = P(), c = w("div"), d = w("div"), d.innerHTML = '<h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Query Result</h3>', g = P(), y.c(), k = P(), Y(M.$$.fragment), m(l, "class", "flex-auto"), m(n, "class", "w-1/2 shrink-0 flex flex-col h-full"), m(d, "class", "flex items-center justify-between mb-2"), m(c, "class", p = "px-2 mb-4 " + /*width*/
+      t = w("div"), n = w("div"), l = w("div"), Y(r.$$.fragment), o = P(), F && F.c(), f = P(), a = w("div"), O && O.c(), s = P(), D && D.c(), u = P(), c = w("div"), d = w("div"), d.innerHTML = '<h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Query Result</h3>', g = P(), y.c(), k = P(), Y(M.$$.fragment), m(l, "class", "shrink h-2/3"), m(n, "class", "w-1/2 shrink-0 flex flex-col h-full"), m(d, "class", "flex items-center justify-between mb-2"), m(c, "class", p = "px-2 mb-4 " + /*width*/
       e[8] + " dark:text-gray-100"), ie(c, "opacity-50", !/*values*/
       e[6] || Object.keys(
         /*values*/
