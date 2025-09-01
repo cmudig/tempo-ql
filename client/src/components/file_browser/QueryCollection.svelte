@@ -104,13 +104,18 @@
     <Hoverable
       class="w-full flex items-center gap-2 {draggingCounter > 0
         ? 'bg-blue-200 dark:bg-blue-200/40'
-        : 'hover:bg-gray-100 dark:hover:bg-gray-800'} dark:text-gray-100 text-gray-900 px-4 py-2 "
+        : 'hover:bg-gray-100 dark:hover:bg-gray-800'} dark:text-gray-100 text-gray-900 pr-4 py-2 "
+      style="padding-left: {-0.5 + indentLevel * 1.5}rem;"
       let:hovering
     >
-      <Fa
-        icon={collapsed ? faChevronRight : faChevronDown}
-        class="w-4 mr-2 shrink-0"
-      />
+      <div class="w-4">
+        <Fa
+          icon={faChevronDown}
+          class="inline-block w-3 h-3 shrink-0 text-sm opacity-70 {collapsed
+            ? '-rotate-90'
+            : ''}"
+        />
+      </div>
       <div class="font-semibold flex-auto py-0.5 truncate">
         {name} <span class="text-xs text-gray-500">({itemCount})</span>
       </div>
@@ -173,8 +178,8 @@
         on:dragleave|stopPropagation={() => draggingCounter--}
       >
         <Hoverable
-          class="pl-{(indentLevel + 1) *
-            4} block w-full flex items-center gap-2 pr-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 dark:text-gray-100 text-gray-900"
+          class="block w-full flex items-center gap-2 pr-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 dark:text-gray-100 text-gray-900"
+          style="padding-left: {-0.5 + (indentLevel + 1) * 1.5}rem;"
           let:hovering
         >
           <div class="font-semibold whitespace-nowrap truncate" title={key}>

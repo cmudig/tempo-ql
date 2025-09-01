@@ -353,7 +353,7 @@
                 </span>
               </div>
               <div class="flex gap-2 items-center justify-between min-w-0">
-                <div class="space-y-2 shrink">
+                <div class="space-y-2 flex-auto shrink min-w-0">
                   {#if totalCount > 0}
                     <SliceMetricBar
                       width={null}
@@ -368,29 +368,26 @@
                   <div
                     class="text-gray-600 dark:text-gray-200 font-mono text-sm truncate"
                   >
-                    {concept.count.toLocaleString()}<span class="opacity-80">
-                      &nbsp;/&nbsp;{totalCount.toLocaleString()}</span
-                    >
+                    {concept.count.toLocaleString()}
                   </div>
                 </div>
-                {#if hovering}
-                  <button
-                    class="px-2 py-1.5 text-sm text-center font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap"
-                    title="Add this concept to your query"
-                    on:click={() => {
-                      if (queryByName)
-                        onInsert(scopeName, `name = '${concept.name}'`);
-                      else if (
-                        typeof concept.id === 'string' &&
-                        Number.isNaN(parseFloat(concept.id))
-                      )
-                        onInsert(scopeName, `id = '${concept.id}'`);
-                      else onInsert(scopeName, `id = ${concept.id}`);
-                    }}
-                  >
-                    <Fa icon={faPlus} class="inline" />
-                  </button>
-                {/if}
+                <button
+                  class="px-2 py-1.5 text-sm text-center font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap"
+                  title="Add this concept to your query"
+                  class:invisible={!hovering}
+                  on:click={() => {
+                    if (queryByName)
+                      onInsert(scopeName, `name = '${concept.name}'`);
+                    else if (
+                      typeof concept.id === 'string' &&
+                      Number.isNaN(parseFloat(concept.id))
+                    )
+                      onInsert(scopeName, `id = '${concept.id}'`);
+                    else onInsert(scopeName, `id = ${concept.id}`);
+                  }}
+                >
+                  <Fa icon={faPlus} class="inline" />
+                </button>
               </div>
             </Hoverable>
           {/each}

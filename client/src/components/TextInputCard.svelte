@@ -21,6 +21,7 @@
   export let onRun: () => void = () => {};
   export let onExplain: () => void = () => {};
   export let onHistoryClick: () => void = () => {};
+  export let savesOnRun: boolean = false;
 
   let textarea: HTMLTextAreaElement;
   let autocompleteContainer: HTMLDivElement;
@@ -157,8 +158,6 @@
   function handleInput(event: Event) {
     const target = event.target as HTMLTextAreaElement;
     const newValue = target.value;
-    console.log('🔍 handleInput - New value:', newValue);
-    console.log('🔍 handleInput - Cursor position:', target.selectionStart);
 
     // Add to undo history
     addToHistory(newValue);
@@ -168,29 +167,18 @@
 
     // Update cursor position
     cursorPosition = target.selectionStart || 0;
-    console.log('🔍 handleInput - Updated cursor position:', cursorPosition);
 
     // Get autocomplete options
     updateAutocompleteOptions(newValue, cursorPosition);
   }
 
   function updateAutocompleteOptions(text: string, position: number) {
-    console.log('🔍 updateAutocompleteOptions - Text:', text);
-    console.log('🔍 updateAutocompleteOptions - Position:', position);
-
     const beforeCursor = text.substring(0, position);
     const afterCursor = text.substring(position);
-    console.log('🔍 updateAutocompleteOptions - Before cursor:', beforeCursor);
-    console.log('🔍 updateAutocompleteOptions - After cursor:', afterCursor);
 
     // Find the word being typed
     const wordMatch = beforeCursor.match(/([^\s]*)$/);
     const currentWord = wordMatch ? wordMatch[1] : '';
-    console.log('🔍 updateAutocompleteOptions - Current word:', currentWord);
-    console.log(
-      '🔍 updateAutocompleteOptions - Data fields available:',
-      dataFields
-    );
 
     if (currentWord.length > 0) {
       autocompleteOptions = getAutocompleteOptions(
@@ -198,49 +186,28 @@
         currentWord,
         beforeCursor
       );
-      console.log(
-        '🔍 updateAutocompleteOptions - Autocomplete options:',
-        autocompleteOptions
-      );
       showAutocomplete = autocompleteOptions.length > 0;
       selectedIndex = 0;
-      console.log(
-        '🔍 updateAutocompleteOptions - Show autocomplete:',
-        showAutocomplete
-      );
     } else {
       showAutocomplete = false;
-      console.log(
-        '🔍 updateAutocompleteOptions - No current word, hiding autocomplete'
-      );
     }
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    console.log('🔍 handleKeydown - Key pressed:', event.key);
-    console.log('🔍 handleKeydown - Show autocomplete:', showAutocomplete);
-    console.log(
-      '🔍 handleKeydown - Options count:',
-      autocompleteOptions.length
-    );
-
     // Handle Ctrl+Z (undo) and Ctrl+Y (redo)
     if (event.ctrlKey || event.metaKey) {
       if (event.key === 'z' && !event.shiftKey) {
         event.preventDefault();
-        console.log('⌨️ Ctrl+Z pressed - Undo');
         undo();
         return;
       } else if (event.key === 'y' || (event.key === 'z' && event.shiftKey)) {
         event.preventDefault();
-        console.log('⌨️ Ctrl+Y or Ctrl+Shift+Z pressed - Redo');
         redo();
         return;
       }
     }
 
     if (!showAutocomplete) {
-      console.log('🔍 handleKeydown - Autocomplete not shown, ignoring key');
       return;
     }
 
@@ -248,10 +215,6 @@
       case 'ArrowDown':
         event.preventDefault();
         selectedIndex = (selectedIndex + 1) % autocompleteOptions.length;
-        console.log(
-          '🔍 handleKeydown - ArrowDown, new selectedIndex:',
-          selectedIndex
-        );
         break;
       case 'ArrowUp':
         event.preventDefault();
@@ -259,32 +222,19 @@
           selectedIndex === 0
             ? autocompleteOptions.length - 1
             : selectedIndex - 1;
-        console.log(
-          '🔍 handleKeydown - ArrowUp, new selectedIndex:',
-          selectedIndex
-        );
         break;
       case 'Enter':
         if (showAutocomplete) {
           event.preventDefault();
-          console.log(
-            '🔍 handleKeydown - Enter pressed, selecting option:',
-            autocompleteOptions[selectedIndex]
-          );
           selectAutocompleteOption(autocompleteOptions[selectedIndex]);
         }
         break;
       case 'Escape':
         showAutocomplete = false;
-        console.log('🔍 handleKeydown - Escape pressed, hiding autocomplete');
         break;
       case 'Tab':
         if (showAutocomplete) {
           event.preventDefault();
-          console.log(
-            '🔍 handleKeydown - Tab pressed, selecting option:',
-            autocompleteOptions[selectedIndex]
-          );
           selectAutocompleteOption(autocompleteOptions[selectedIndex]);
         }
         break;
@@ -292,27 +242,13 @@
   }
 
   function selectAutocompleteOption(option: { value: string; type: string }) {
-    console.log('🔍 selectAutocompleteOption - Selected option:', option);
-    console.log('🔍 selectAutocompleteOption - Current value:', value);
-    console.log(
-      '🔍 selectAutocompleteOption - Cursor position:',
-      cursorPosition
-    );
-
     const beforeCursor = value.substring(0, cursorPosition);
     const afterCursor = value.substring(cursorPosition);
-    console.log('🔍 selectAutocompleteOption - Before cursor:', beforeCursor);
-    console.log('🔍 selectAutocompleteOption - After cursor:', afterCursor);
 
     // Find the word being replaced
     const wordMatch = beforeCursor.match(/([^\s]*)$/);
     const currentWord = wordMatch ? wordMatch[1] : '';
     const wordStart = beforeCursor.length - currentWord.length;
-    console.log('🔍 selectAutocompleteOption - Current word:', currentWord);
-    console.log(
-      '🔍 selectAutocompleteOption - Word start position:',
-      wordStart
-    );
 
     // Calculate the replacement based on the option type
     let replacement: string;
@@ -346,31 +282,22 @@
       replacement = beforeCursor.substring(0, wordStart) + '#' + option.value;
     }
 
-    console.log('🔍 selectAutocompleteOption - Replacement:', replacement);
-
     // Update the value
     const newValue = replacement + afterCursor;
-    console.log('🔍 selectAutocompleteOption - New value:', newValue);
     value = newValue;
     onInput(newValue);
 
     // Update cursor position
     const newCursorPosition = replacement.length;
-    console.log(
-      '🔍 selectAutocompleteOption - New cursor position:',
-      newCursorPosition
-    );
     setTimeout(() => {
       if (textarea) {
         textarea.setSelectionRange(newCursorPosition, newCursorPosition);
         textarea.focus();
-        console.log('🔍 selectAutocompleteOption - Cursor position set');
       }
     }, 0);
 
     // Hide autocomplete
     showAutocomplete = false;
-    console.log('🔍 selectAutocompleteOption - Autocomplete hidden');
   }
 </script>
 
@@ -467,7 +394,7 @@
         class:cursor-not-allowed={!value.trim()}
       >
         <Fa icon={faPlay} class="inline mr-2" />
-        Run Query
+        {savesOnRun ? 'Save and Run' : 'Run Query'}
       </button>
     </div>
   </div>

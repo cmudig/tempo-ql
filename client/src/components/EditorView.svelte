@@ -22,6 +22,7 @@
   import Fa from 'svelte-fa';
   import QueryFileBrowser from './file_browser/QueryFileBrowser.svelte';
   import Hoverable from '../utils/Hoverable.svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   export let fileContents: QueryFile = {};
   export let savePath: string = '';
@@ -100,12 +101,69 @@
     ];
   }
 
+  function duplicateQuery() {
+    let result = duplicateQueryItem(fileContents, currentQueryPath);
+    fileContents = result.contents;
+    currentQueryPath = result.queryPath;
+  }
+
+  function deleteQuery() {
+    if (
+      confirm(
+        `Are you sure you want to delete this query? This action cannot be undone.`
+      )
+    ) {
+      fileContents = deleteQueryItem(fileContents, currentQueryPath);
+      currentQueryPath = [];
+    }
+    console.error('deletin');
+  }
+
   function runAndSaveQuery() {
     if (currentQueryPath.length > 0) {
       fileContents = updateQueryItem(fileContents, currentQueryPath, textInput);
     }
     onRun();
   }
+
+  let alive: boolean = false;
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (!alive) return;
+    // Handle Ctrl+R (rename), Ctrl+D (duplicate), Ctrl+Shift+Backspace, Ctrl+Q
+    if (event.ctrlKey || event.metaKey) {
+      if (!!savePath && event.key === 'r' && !event.shiftKey) {
+        event.preventDefault();
+        isEditingName = true;
+        return;
+      } else if (!!savePath && event.key === 'd' && !event.shiftKey) {
+        event.preventDefault();
+        duplicateQuery();
+        return;
+      } else if (!!savePath && event.key === 'Backspace' && event.shiftKey) {
+        event.preventDefault();
+        deleteQuery();
+        return;
+      } else if (
+        !!savePath &&
+        event.key === 'q' &&
+        currentQueryPath.length > 0
+      ) {
+        event.preventDefault();
+        showingBrowser = !showingBrowser;
+        return;
+      }
+    }
+  }
+
+  onMount(() => {
+    alive = true;
+    window.addEventListener('keydown', handleKeydown);
+  });
+  onDestroy(() => {
+    alive = false;
+    window.removeEventListener('keydown', handleKeydown);
+  });
 </script>
 
 <div class="w-1/2 shrink-0 flex flex-col h-full z-0">
@@ -122,7 +180,7 @@
       {#if !!savePath}
         <button
           class="px-2 py-1.5 text-sm text-center font-semibold rounded transition-colors duration-200 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-800 dark:text-gray-100 whitespace-nowrap"
-          title="Browse saved queries"
+          title="Browse saved queries (Ctrl+Q)"
           on:click={() => (showingBrowser = true)}
         >
           <Fa icon={faListDots} class="inline" />
@@ -153,6 +211,7 @@
           >
             <h3
               class="text-lg font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap truncate"
+              title="Rename this query (Ctrl+R)"
             >
               {currentQueryPath[currentQueryPath.length - 1] ?? 'TempoQL Query'}
             </h3>
@@ -174,23 +233,16 @@
         {/if}
         <div class="flex items-center">
           <button
-            on:click|stopPropagation={() => {
-              let result = duplicateQueryItem(fileContents, currentQueryPath);
-              fileContents = result.contents;
-              currentQueryPath = result.queryPath;
-            }}
+            on:click|stopPropagation={duplicateQuery}
             class="px-2 py-1 text-xs hover:opacity-50 dark:text-gray-100"
-            title="Duplicate this query"
+            title="Duplicate this query (Ctrl+D)"
           >
             <Fa icon={faCopy} />
           </button>
           <button
-            on:click|stopPropagation={() => {
-              fileContents = deleteQueryItem(fileContents, currentQueryPath);
-              currentQueryPath = [];
-            }}
+            on:click|stopPropagation={deleteQuery}
             class="px-2 py-1 text-xs hover:opacity-50 dark:text-gray-100"
-            title="Delete this query"
+            title="Delete this query (Ctrl+Shift+Backspace)"
           >
             <Fa icon={faTrash} />
           </button>
@@ -229,6 +281,7 @@
         {onExplain}
         onHistoryClick={onQueryHistoryClick}
         width="w-full"
+        savesOnRun={!!savePath}
       />
     </div>
 

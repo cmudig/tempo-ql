@@ -7,7 +7,10 @@ export function createNewGroup(
   path: string[] = []
 ): QueryFile {
   if (path.length > 0) {
-    return createNewGroup(base[path[0]] as any, path.slice(1));
+    return {
+      ...base,
+      [path[0]]: createNewGroup(base[path[0]] as any, path.slice(1)),
+    };
   }
 
   let groupNum = 1;
