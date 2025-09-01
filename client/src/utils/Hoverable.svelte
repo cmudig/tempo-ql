@@ -11,6 +11,7 @@
   {style}
   on:mouseenter={() => (hovering = true)}
   on:mouseleave={() => (hovering = false)}
+  on:click
 >
   <slot {hovering} />
 </div>

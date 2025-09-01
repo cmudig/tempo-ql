@@ -197,7 +197,7 @@
         class="flex flex-col w-full h-full items-center justify-center text-center gap-4"
       >
         <div
-          class="w-1/2 text-gray-700 dark:text-gray-200 text-lg font-semibold"
+          class="w-3/4 text-gray-700 dark:text-gray-200 text-lg font-semibold"
         >
           Data elements not retrieved yet
         </div>

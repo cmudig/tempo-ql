@@ -1,17 +1,13 @@
 <script lang="ts">
   import { createBackendConnection } from './utils/backend';
-  import { theme } from './stores/theme';
 
   // Import all modular components
   import TabBar from './components/TabBar.svelte';
   import DataElementsTab from './components/DataElementsTab.svelte';
   import QueryResultsTab from './components/QueryResultsTab.svelte';
-  import StatusFooter from './components/StatusFooter.svelte';
-  import ThemeToggle from './components/ThemeToggle.svelte';
   import LoadingBar from './components/LoadingBar.svelte';
   import HistoryDropdown from './components/HistoryDropdown.svelte';
-  import TextInputCard from './components/TextInputCard.svelte';
-  import AiAssistantSection from './components/AIAssistantSection.svelte';
+  import EditorView from './components/EditorView.svelte';
 
   export let model;
 
@@ -20,6 +16,8 @@
 
   // Destructure stores and functions for cleaner usage
   const {
+    savePath,
+    fileContents,
     values,
     listNames,
     runQuery,
@@ -141,43 +139,26 @@
   class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex"
   style="height: 600px;"
 >
-  <div class="w-1/2 shrink-0 flex flex-col h-full">
-    <!-- Text Input Card -->
-    <div class="shrink h-3/4">
-      <TextInputCard
-        bind:value={$textInput}
-        {dataFields}
-        onRun={handleRun}
-        onExplain={handleLLMExplanation}
-        onHistoryClick={handleQueryHistoryClick}
-        width="w-full"
-      />
-    </div>
-
-    {#if $llmAvailable}
-      <!-- AI Assistant Section with scrollable area -->
-      <div class="w-full h-1/2 overflow-hidden">
-        <AiAssistantSection
-          onSubmit={handleLLMQuestionSubmit}
-          llmResponse={$llmResponse}
-          isLoading={$llmLoading}
-          error={$llmError}
-          apiStatus={$apiStatus}
-          width="w-full"
-          scrollable={true}
-          extractedQuery={$extractedQuery}
-          hasExtractedQuery={$hasExtractedQuery}
-          onQueryExtracted={handleQueryExtraction}
-          onHistoryClick={handleHistoryClick}
-          bind:question={currentQuestion}
-          onRun={(text) => {
-            $textInput = text;
-            handleRun();
-          }}
-        />
-      </div>
-    {/if}
-  </div>
+  <EditorView
+    bind:fileContents={$fileContents}
+    savePath={$savePath}
+    bind:textInput={$textInput}
+    bind:aiQuestion={currentQuestion}
+    {dataFields}
+    onRun={handleRun}
+    onExplain={handleLLMExplanation}
+    onLLMSubmit={handleLLMQuestionSubmit}
+    llmResponse={$llmResponse}
+    llmLoading={$llmLoading}
+    llmError={$llmError}
+    llmAvailable={$llmAvailable}
+    apiStatus={$apiStatus}
+    extractedQuery={$extractedQuery}
+    hasExtractedQuery={$hasExtractedQuery}
+    onQueryExtracted={handleQueryExtraction}
+    onHistoryClick={handleHistoryClick}
+    onQueryHistoryClick={handleQueryHistoryClick}
+  />
 
   <div
     class="w-1/2 h-full rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"

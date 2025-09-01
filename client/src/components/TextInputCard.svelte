@@ -374,13 +374,7 @@
   }
 </script>
 
-<div class="flex flex-col w-full h-full p-4 mb-2">
-  <div class="flex items-center mb-4 gap-2 shrink-0">
-    <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 pr-2">
-      TempoQL Query
-    </h3>
-  </div>
-
+<div class="flex flex-col w-full h-full px-4 mb-2">
   <!-- Text Input Section -->
   <div class="relative flex-auto min-h-0">
     <textarea

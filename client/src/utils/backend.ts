@@ -15,8 +15,14 @@ export interface BackendModel {
 }
 
 export function createBackendConnection(model: BackendModel) {
-  const type = traitlet(model, 'type', 'meds');
   const values = traitlet(model, 'values', {});
+
+  // each key is a name of a variable or a group. The value can be another
+  // dictionary of variables/groups or a string representing a Tempo query
+  const fileContents = traitlet(model, 'file_contents', {});
+
+  const savePath = traitlet(model, '_save_path', '');
+
   const listNames = traitlet(model, 'list_names', {
     attributes: [],
     events: [],
@@ -56,8 +62,9 @@ export function createBackendConnection(model: BackendModel) {
 
   return {
     // Reactive stores
-    type,
     values,
+    savePath,
+    fileContents,
     listNames,
     subqueries,
     queryError,
