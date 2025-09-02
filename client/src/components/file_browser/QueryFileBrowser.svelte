@@ -8,7 +8,7 @@
     duplicateQueryItem,
     getQueryItem,
     moveQueryItem,
-    QueryFile,
+    type QueryFile,
     queryItemExists,
     queryNameValid,
   } from './queryfile';

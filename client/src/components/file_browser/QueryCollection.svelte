@@ -1,6 +1,6 @@
 <script lang="ts">
   import Fa from 'svelte-fa';
-  import { QueryFile, queryItemExists } from './queryfile';
+  import { type QueryFile, queryItemExists } from './queryfile';
   import {
     faChevronDown,
     faChevronRight,

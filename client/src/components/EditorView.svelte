@@ -6,7 +6,7 @@
     getQueryItem,
     moveQueryItem,
     placeQueryItem,
-    QueryFile,
+    type QueryFile,
     queryItemExists,
     queryNameExistsAnywhere,
     queryNameValid,

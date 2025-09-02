@@ -21,3 +21,7 @@ To try the query engine, you can run `python OMOPQueryEngine/test.py`. The code 
 ## Getting Started with the Local Database
 
 [Drive to download the MIMIC-IV OMOP CDM data](https://drive.google.com/file/d/1_C0MBWa-Ku1DDD5532S_IFA75hYhEjE0/view?usp=sharing) and put them under the `OMOPQueryEngine` directory.
+
+## Dev Notes
+
+If the Vite dev server stops working after you make some changes (it may show a JavaScript error like 'failed to load model'), check that any imports of TypeScript types are prefixed with the word `type`.
