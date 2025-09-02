@@ -3,7 +3,7 @@
   import QueryCollection from './QueryCollection.svelte';
   import {
     createNewGroup,
-    createNewQueryRecursive,
+    createNewQuery,
     deleteQueryItem,
     duplicateQueryItem,
     getQueryItem,
@@ -12,6 +12,7 @@
     queryItemExists,
   } from './queryfile';
   import { faListDots, faPlus } from '@fortawesome/free-solid-svg-icons';
+  import { areObjectsEqual } from '../../utils/utils';
 
   export let fileContents: QueryFile = {};
   export let savePath: string = '';
@@ -19,8 +20,8 @@
   export let onClose: () => void = () => {};
   export let onSelect: (path: string[], query: string) => void = () => {};
 
-  function createNewQuery(path: string[] = []) {
-    let result = createNewQueryRecursive(fileContents, path);
+  function createQuery(path: string[] = []) {
+    let result = createNewQuery(fileContents, path);
     fileContents = result.contents;
     onSelect(
       result.queryPath,
@@ -29,21 +30,47 @@
   }
 
   function moveItem(src: string[], dst: string[]) {
+    if (areObjectsEqual(src, dst)) return;
     if (queryItemExists(fileContents, dst)) {
-      if (
-        !confirm(
-          'An item with this name already exists in this location. Replace it?'
-        )
-      )
-        return;
+      alert(
+        'An item with this name already exists - all items must have unique names.'
+      );
+      return;
     }
     fileContents = moveQueryItem(fileContents, src, dst);
   }
 
+  function handleDragOver(event: DragEvent) {
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = 'move';
+  }
+
+  function handleDrop(event: DragEvent, targetPath: string[]) {
+    event.preventDefault();
+    draggingCounter = 0;
+    const data = event.dataTransfer?.getData('application/json');
+    if (data) {
+      const sourcePath = JSON.parse(data);
+      // add the name of the current drag object to the drop zone
+      targetPath = [...targetPath, sourcePath[sourcePath.length - 1]];
+      if (JSON.stringify(sourcePath) !== JSON.stringify(targetPath)) {
+        moveItem(sourcePath, targetPath);
+      }
+    }
+  }
+
   let draggingOnBrowser: boolean = false;
+  let draggingCounter: number = 0;
 </script>
 
-<div class="flex flex-col">
+<div
+  class="flex flex-col mb-2 max-h-full"
+  class:h-full={Object.entries(fileContents).length == 0}
+  on:dragover={handleDragOver}
+  on:drop={(e) => handleDrop(e, [])}
+  on:dragenter|preventDefault|stopPropagation={() => draggingCounter++}
+  on:dragleave|stopPropagation={() => draggingCounter--}
+>
   <div class="px-4 pt-2 flex items-center mb-4 gap-2 shrink-0">
     {#if allowClose}
       <button
@@ -72,7 +99,7 @@
     </button>
     <button
       on:click={() => {
-        createNewQuery([]);
+        createQuery([]);
       }}
       class="px-3 py-1.5 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
       title="Create a new query at the top level"
@@ -87,7 +114,7 @@
       organize.
     </div>
     <div
-      class="rounded-lg {draggingOnBrowser
+      class="rounded-lg {draggingOnBrowser || draggingCounter > 0
         ? 'outline outline-2 outline-blue-500'
         : ''} border border-gray-200 dark:border-gray-700 overflow-auto min-h-0 flex-auto mx-4"
     >
@@ -96,7 +123,7 @@
         {onSelect}
         onNewGroup={(path) =>
           (fileContents = createNewGroup(fileContents, path))}
-        onNewQuery={(path) => createNewQuery(path)}
+        onNewQuery={(path) => createQuery(path)}
         onDelete={(path) =>
           (fileContents = deleteQueryItem(fileContents, path))}
         onDuplicate={(path) =>

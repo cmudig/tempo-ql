@@ -2,6 +2,7 @@ import lark
 import re
 import csv
 import datetime
+from pathlib import Path
 from .data_types import *
 import json
 import os
@@ -493,7 +494,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
 
     def agg_expr(self, tree):
         agg_method = self.visit(tree.children[0])
-        expr = self.visit(tree.children[1])
+        expr = self._log_subquery(tree.children[1], self.visit(tree.children[1]))
         *time_bounds, time_index = self.visit(tree.children[-1]) if tree.children[-1] is not None else self.time_bounds(lark.Tree('time_bounds', [
             lark.Token('FROM', ''), 
             lark.Tree('min_time', []),
@@ -1148,6 +1149,44 @@ class QueryEngine:
                                         verbose=True)
         tree = self.parse(query_string)
         result = query_evaluator.visit(tree, query_string=query_string, return_subqueries=return_subqueries)
+        return result
+    
+    def query_from(self, query_source, flatten=True, **kwargs):
+        if isinstance(query_source, (str, Path)):
+            if isinstance(query_source, str): 
+                if not os.path.splitext(query_source)[1]:
+                    queries = query_source
+                else:
+                    query_source = Path(query_source)
+            
+            if isinstance(query_source, Path):
+                if query_source.suffix == '.txt':
+                    queries = Path(query_source).read_text()
+                elif query_source.suffix == '.json':
+                    import json
+                    queries = json.loads(Path(query_source).read_text())
+                else:
+                    raise ValueError(f"Unknown file extension '{query_source.suffix}'. txt and json are supported.")
+        else:
+            queries = query_source        
+        
+        def _query_recursive(q):
+            if isinstance(q, str):
+                return self.query(q, **kwargs)
+            else:
+                return {k: _query_recursive(v) for k, v in q.items()}
+            
+        result = _query_recursive(queries)
+        if flatten and isinstance(result, dict):
+            flat_results = {}
+            def get_results(q, prefix=''):
+                if isinstance(q, dict):
+                    for k, v in q.items():  
+                        get_results(v, prefix=(prefix + '_' + k) if prefix else k)
+                else:
+                    flat_results[prefix] = q
+            get_results(result)
+            result = flat_results
         return result
     
     def parse(self, query, keep_all_tokens=False):

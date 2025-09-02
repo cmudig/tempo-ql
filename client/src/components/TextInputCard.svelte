@@ -204,6 +204,10 @@
         event.preventDefault();
         redo();
         return;
+      } else if (event.key === 'Enter' && event.shiftKey) {
+        event.preventDefault();
+        onRun();
+        return;
       }
     }
 
@@ -307,7 +311,7 @@
     <textarea
       id="text-input"
       bind:this={textarea}
-      class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[120px] relative z-20"
+      class="w-full h-full p-4 pb-16 bg-transparent font-mono text-sm bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 placeholder-gray-500 dark:placeholder-gray-400 resize-none overflow-hidden min-h-[40px] relative z-20"
       placeholder="// Write your Tempo-QL query here... (Ctrl+Z to undo, Ctrl+Y to redo)"
       bind:value
       on:input={handleInput}
@@ -392,6 +396,7 @@
         disabled={!value.trim()}
         class:opacity-50={!value.trim()}
         class:cursor-not-allowed={!value.trim()}
+        title="Run the query on the dataset (Ctrl+Shift+Enter)"
       >
         <Fa icon={faPlay} class="inline mr-2" />
         {savesOnRun ? 'Save and Run' : 'Run Query'}

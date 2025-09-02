@@ -83,12 +83,8 @@
         newName,
       ])
     ) {
-      if (
-        !confirm(
-          'This name already exists. Are you sure you want to overwrite the existing item?'
-        )
-      )
-        return;
+      alert('This name already exists. All item names must be unique.');
+      return;
     }
 
     fileContents = moveQueryItem(fileContents, currentQueryPath, [
@@ -223,7 +219,9 @@
             {/if}
           </Hoverable>
           {#if currentQueryPath.length > 1}
-            <div class="text-sm text-gray-600 dark:text-gray-400">
+            <div
+              class="text-sm text-gray-600 dark:text-gray-400 truncate min-w-0"
+            >
               in <span class="font-mono"
                 >{currentQueryPath[currentQueryPath.length - 2]}</span
               >
@@ -253,11 +251,12 @@
               fileContents,
               currentQueryPath.slice(0, currentQueryPath.length - 1)
             );
+            console.log('result', result);
             fileContents = result.contents;
             currentQueryPath = result.queryPath;
             textInput = '';
           }}
-          class="px-3 py-1.5 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
+          class="px-3 py-1.5 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white whitespace-nowrap"
           title="Create a new query at the top level"
         >
           <Fa icon={faPlus} class="inline mr-2" />
@@ -287,7 +286,7 @@
 
     {#if llmAvailable}
       <!-- AI Assistant Section with scrollable area -->
-      <div class="w-full h-1/2 overflow-hidden">
+      <div class="mt-4 w-full h-1/2 overflow-hidden">
         <AIAssistantSection
           onSubmit={onLLMSubmit}
           {llmResponse}

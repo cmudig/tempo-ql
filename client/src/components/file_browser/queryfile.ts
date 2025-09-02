@@ -6,41 +6,29 @@ export function createNewGroup(
   base: QueryFile,
   path: string[] = []
 ): QueryFile {
-  if (path.length > 0) {
-    return {
-      ...base,
-      [path[0]]: createNewGroup(base[path[0]] as any, path.slice(1)),
-    };
+  let queryNum = 1;
+  let queryName = `Group ${queryNum}`;
+  while (queryNameExistsAnywhere(base, queryName)) {
+    queryNum += 1;
+    queryName = `Group ${queryNum}`;
   }
-
-  let groupNum = 1;
-  let groupName = `Group ${groupNum}`;
-  while (base[groupName]) {
-    groupNum += 1;
-    groupName = `Group ${groupNum}`;
-  }
-  return { ...base, [groupName]: {} };
+  return placeQueryItem(base, [...path, queryName], {});
 }
 
-export function createNewQueryRecursive(
+export function createNewQuery(
   base: QueryFile,
   path: string[] = []
 ): { contents: QueryFile; queryPath: string[] } {
-  if (path.length > 0) {
-    let result = createNewQueryRecursive(base[path[0]] as any, path.slice(1));
-    return {
-      contents: { ...base, [path[0]]: result.contents },
-      queryPath: [path[0], ...result.queryPath],
-    };
-  }
-
   let queryNum = 1;
   let queryName = `Query ${queryNum}`;
-  while (base[queryName]) {
+  while (queryNameExistsAnywhere(base, queryName)) {
     queryNum += 1;
     queryName = `Query ${queryNum}`;
   }
-  return { contents: { ...base, [queryName]: '' }, queryPath: [queryName] };
+  return {
+    contents: placeQueryItem(base, [...path, queryName], ''),
+    queryPath: [...path, queryName],
+  };
 }
 
 export function deleteQueryItem(base: QueryFile, path: string[]): QueryFile {
@@ -99,6 +87,21 @@ export function queryItemExists(base: QueryFile, path: string[]): boolean {
     );
   }
   return base[path[0]] !== undefined;
+}
+
+export function queryNameExistsAnywhere(
+  base: QueryFile,
+  name: string
+): boolean {
+  if (typeof base[name] === 'string') return true;
+  for (let key of Object.keys(base)) {
+    if (
+      typeof base[key] === 'object' &&
+      queryNameExistsAnywhere(base[key], name)
+    )
+      return true;
+  }
+  return false;
 }
 
 export function duplicateQueryItem(

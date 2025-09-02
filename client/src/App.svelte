@@ -137,7 +137,7 @@
 
 <main
   class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex"
-  style="height: 600px;"
+  style="height: min(600px, max(400px, 70vh));"
 >
   <EditorView
     bind:fileContents={$fileContents}
@@ -160,44 +160,46 @@
     onQueryHistoryClick={handleQueryHistoryClick}
   />
 
-  <div
-    class="w-1/2 h-full rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"
-  >
-    <!-- Tab Bar -->
-    <TabBar {activeTab} onTabChange={handleTabChange} />
+  <div class="w-1/2 mb-2">
+    <div
+      class="w-full h-full rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"
+    >
+      <!-- Tab Bar -->
+      <TabBar {activeTab} onTabChange={handleTabChange} />
 
-    <!-- Tab Content -->
-    <div class="flex-auto w-full min-h-0 z-0">
-      {#if activeTab === 'results'}
-        <QueryResultsTab
-          bind:textInput={$textInput}
-          onRun={handleRun}
-          onExplain={handleLLMExplanation}
-          queryError={$queryError}
-          values={$values}
-          subqueries={$subqueries}
-          llmAvailable={$llmAvailable}
-          llmExplanation={$llmExplanation}
-          width="w-full"
-        />
-      {:else if activeTab === 'data-elements'}
-        <DataElementsTab
-          scopes={$scopes}
-          bind:scopeName={selectedScope}
-          scopeConcepts={$scopeConcepts}
-          isLoading={$isLoading}
-          loadingMessage={$loadingMessage}
-          onScopeSelect={(scope) => {
-            handleScopeAnalysis(scope, false);
-          }}
-          onAnalyze={() => {
-            handleScopeAnalysis(selectedScope, true);
-          }}
-          onInsert={(scope, selection) => {
-            $textInput = $textInput + `{${selection}; scope = ${scope}}`;
-          }}
-        />
-      {/if}
+      <!-- Tab Content -->
+      <div class="flex-auto w-full min-h-0 z-0">
+        {#if activeTab === 'results'}
+          <QueryResultsTab
+            bind:textInput={$textInput}
+            onRun={handleRun}
+            onExplain={handleLLMExplanation}
+            queryError={$queryError}
+            values={$values}
+            subqueries={$subqueries}
+            llmAvailable={$llmAvailable}
+            llmExplanation={$llmExplanation}
+            width="w-full"
+          />
+        {:else if activeTab === 'data-elements'}
+          <DataElementsTab
+            scopes={$scopes}
+            bind:scopeName={selectedScope}
+            scopeConcepts={$scopeConcepts}
+            isLoading={$isLoading}
+            loadingMessage={$loadingMessage}
+            onScopeSelect={(scope) => {
+              handleScopeAnalysis(scope, false);
+            }}
+            onAnalyze={() => {
+              handleScopeAnalysis(selectedScope, true);
+            }}
+            onInsert={(scope, selection) => {
+              $textInput = $textInput + `{${selection}; scope = ${scope}}`;
+            }}
+          />
+        {/if}
+      </div>
     </div>
   </div>
 
