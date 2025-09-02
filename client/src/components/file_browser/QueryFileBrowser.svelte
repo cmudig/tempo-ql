@@ -16,10 +16,12 @@
   import { areObjectsEqual } from '../../utils/utils';
 
   export let fileContents: QueryFile = {};
+  export let currentQueryPath: string[] = [];
   export let savePath: string = '';
   export let allowClose: boolean = true;
   export let onClose: () => void = () => {};
   export let onSelect: (path: string[], query: string) => void = () => {};
+  export let onRename: (newPath: string[]) => void = () => {};
 
   function createQuery(path: string[] = []) {
     let result = createNewQuery(fileContents, path);
@@ -31,6 +33,7 @@
   }
 
   function moveItem(src: string[], dst: string[]) {
+    console.log('moving', src, dst, areObjectsEqual(src, dst));
     if (areObjectsEqual(src, dst)) return;
     if (
       typeof getQueryItem(fileContents, src) === 'string' &&
@@ -48,6 +51,7 @@
       return;
     }
     fileContents = moveQueryItem(fileContents, src, dst);
+    if (areObjectsEqual(currentQueryPath, src)) onRename(dst);
   }
 
   function handleDragOver(event: DragEvent) {

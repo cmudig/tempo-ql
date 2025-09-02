@@ -1087,7 +1087,10 @@ class QueryEngine:
         # Build dependency graph
         deps = {}
         for var, query in queries.items():
-            refs = set(self._get_variable_references(query))
+            try:
+                refs = set(self._get_variable_references(query))
+            except Exception as e:
+                raise ValueError(f"Failed to parse query '{var[-1]}': {e}")
             if var[-1] in refs:
                 raise ValueError(f"Variable '{var[-1]}' refers to itself in its own computation.")
             # Only keep references that are also variables in the dictionary
@@ -1157,7 +1160,10 @@ class QueryEngine:
         cache_store = variable_store if variable_store is not None else {} 
         for var in ordering:
             if var[-1] not in cache_store:
-                cache_store[var[-1]] = self.query(flat_queries[var], variable_store=cache_store, **kwargs)
+                try:
+                    cache_store[var[-1]] = self.query(flat_queries[var], variable_store=cache_store, **kwargs)
+                except Exception as e:
+                    raise ValueError(f"Failed to execute query '{var[-1]}': {e}")
             result[var] = cache_store[var[-1]]
         
         if flatten:

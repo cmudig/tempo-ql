@@ -100,7 +100,7 @@ class MEDSDataset(GenericDataset):
                         "default_value_field": self.value_fields[0],
                     })
                 else:
-                    names = self.list_names(scope=scope)["name"]
+                    names = self.list_data_elements(scope=scope)["name"]
                     self._table_context.append({
                         "scope": scope,
                         "attributes": {
@@ -182,7 +182,7 @@ class MEDSDataset(GenericDataset):
     def get_id_field_type(self):
         return Integer if pd.api.types.is_integer_dtype(self.data[self.id_field].dtype) else String
     
-    def list_names(self, scope=None, return_counts=False, cache_only=False):
+    def list_data_elements(self, scope=None, return_counts=False, cache_only=False):
         if (scope, return_counts) in self._name_list_cache:
             return self._name_list_cache[(scope, return_counts)]
         if cache_only: return pd.DataFrame({'name': [], 'scope': [], 'type': [], **({'count': []} if return_counts else {})})

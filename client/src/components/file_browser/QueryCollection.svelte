@@ -42,6 +42,7 @@
     if (
       key == null ||
       itemCount == 0 ||
+      (typeof queries[key] === 'string' && queries[key].length == 0) ||
       confirm(
         `Are you sure you want to delete this ${key != null ? 'query' : 'group'}? This action cannot be undone.`
       )
@@ -252,7 +253,10 @@
                     editingPath = null;
                   }
                 }}
-                on:blur={() => onMove([...path, key], [...path, newName])}
+                on:blur={() => {
+                  onMove([...path, key], [...path, newName]);
+                  editingPath = null;
+                }}
               />
             </form>
           {:else}

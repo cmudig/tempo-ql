@@ -209,9 +209,13 @@
     <QueryFileBrowser
       bind:fileContents
       {savePath}
+      {currentQueryPath}
       allowClose={currentQueryPath.length > 0}
       onClose={() => (showingBrowser = false)}
       onSelect={handleQuerySelection}
+      onRename={(newPath) => {
+        currentQueryPath = newPath;
+      }}
     />
   {:else}
     <div class="px-4 pt-2 flex items-center mb-4 gap-2 shrink-0">

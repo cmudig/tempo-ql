@@ -360,11 +360,11 @@ Output:
                         raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
                 else:
                     responses.append(response.text)
-                    return re.sub('\n{2,}', '\n\n', '\n\n'.join(responses))
+                    return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
             else:
                 print("Plain text")
                 responses.append(response.text)
-                return re.sub('\n{2,}', '\n\n', '\n\n'.join(responses))
+                return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
         
