@@ -11,7 +11,7 @@ You will need a dataset and a dataset specification to start using TempoQL. In `
 Once you have a dataset and specification, running TempoQL looks like this:
 
 ```python
-from tempo_ql import QueryEngine, GenericDataset
+from tempo_ql import QueryEngine, GenericDataset, formats
 
 db_specification = formats.omop() # also available: mimiciv(), eicu()
 dataset = GenericDataset(sql_connection_string, db_specification)
