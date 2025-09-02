@@ -7,7 +7,9 @@ from typing import Optional, Tuple, Any, TextIO
 from collections.abc import MutableMapping
 import json
 
-from .evaluator import QueryEngine
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .evaluator import QueryEngine
 from .ai_assistant import AIAssistant
 from .utils import make_query_result_summary
 
@@ -76,7 +78,7 @@ class TempoQLWidget(anywidget.AnyWidget):
     query_history = traitlets.List([]).tag(sync=True)
     ai_history = traitlets.List([]).tag(sync=True)
     
-    def __init__(self, query_engine: Optional[QueryEngine] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
+    def __init__(self, query_engine: Optional["QueryEngine"] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
         """
         Initialize the Tempo-QL widget.
         
@@ -143,7 +145,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._save_path = ''
             self.file_contents = {}
 
-    def _init_components(self, query_engine: Optional[QueryEngine], variable_store: Optional[MutableMapping], api_key: Optional[str]):
+    def _init_components(self, query_engine: Optional["QueryEngine"], variable_store: Optional[MutableMapping], api_key: Optional[str]):
         """Initialize core widget components."""
         self.query_engine = query_engine
         self.variable_store = variable_store
@@ -167,7 +169,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self.ids_length = len(self.ids)
             
             # Get concept names
-            names_df = self.query_engine.dataset.list_names(return_counts=True)
+            names_df = self.query_engine.dataset.list_data_elements(return_counts=True)
             self.list_names = (
                 names_df['name'].tolist() 
                 if hasattr(names_df, 'name') and 'name' in names_df.columns 
@@ -287,7 +289,7 @@ class TempoQLWidget(anywidget.AnyWidget):
     def analyze_scope(self, scope_name: str, force_refresh: bool = False):
         """Analyze a data scope using the ScopeAnalyzer."""
         self._set_loading(True, "Loading scopes...")
-        concepts = self.query_engine.dataset.list_names(scope=scope_name, return_counts=True, cache_only=not force_refresh)
+        concepts = self.query_engine.dataset.list_data_elements(scope=scope_name, return_counts=True, cache_only=not force_refresh)
         if not len(concepts):
             self._set_loading(False)
             return None

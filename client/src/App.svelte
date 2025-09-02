@@ -47,7 +47,7 @@
 
   let selectedScope: string = '';
 
-  // Get data fields from backend list_names (now a simple list)
+  // Get data fields from backend list_data_elements (now a simple list)
   $: dataFields = $listNames || [];
 
   // Tab state

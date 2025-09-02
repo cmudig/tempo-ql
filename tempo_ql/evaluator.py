@@ -1087,7 +1087,7 @@ class QueryEngine:
         # Build dependency graph
         deps = {}
         for var, query in queries.items():
-            refs = set(self.get_variable_references(query))
+            refs = set(self._get_variable_references(query))
             if var[-1] in refs:
                 raise ValueError(f"Variable '{var[-1]}' refers to itself in its own computation.")
             # Only keep references that are also variables in the dictionary
@@ -1186,3 +1186,23 @@ class QueryEngine:
     def get_last_sql_query(self):
         """Get the last SQL query that was executed by the dataset"""
         return getattr(self.dataset, 'last_sql_query', None)
+
+    def interactive(self, **kwargs):
+        """
+        Start an interactive notebook widget to run queries.
+        
+        Args:
+        * file_path: A string or Path object pointing to a JSON file in which
+            to save collections of queries (results are not saved here). If this
+            path does not exist, a new file will be created.
+        * variable_store: A dict-like object (such as dict, DatabaseVariableStore, 
+            or FileVariableStore) to save query results to, if using a file path.
+        * api_key: Pass a Gemini API key to enable LLM-based authoring,
+            explanation, and debugging features. The only data passed to the LLM
+            is a dictionary of table info (returned by 
+            self.dataset.get_table_context()) and concept information returned by 
+            self.dataset.list_names().
+        * dev: Pass True to use the autoreloading frontend dev server.
+        """
+        from .widget import TempoQLWidget
+        return TempoQLWidget(self, **kwargs)
