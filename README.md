@@ -2,22 +2,41 @@
 
 ## Installation
 
-You may first want to create a conda environment or other virtual environment to install packages in. Clone the repo, cd into it and run `pip install -r requirements.txt`.
+You may first want to create a conda environment or other virtual environment to install packages in. Clone the repo, cd into it and run `pip install -e .`.
 
-For the Jupyter widget, cd into the `client` directory and run `npm install`.
+## Quickstart
 
-## Getting Started with the Query Language
+You will need a dataset and a dataset specification to start using TempoQL. In `demo.ipynb`, we show how to use the query language using MIMIC-IV in OMOP format.
 
-To try the query language, you can run `python query_language/evaluator.py`. The code at the bottom of this script shows an example of how to load a sample dataset and run basic queries on it.
+Once you have a dataset and specification, running TempoQL looks like this:
 
-## Running the Widget
+```python
+from tempo_ql import QueryEngine, GenericDataset
 
-Open a terminal and start the dev server by cd'ing into `client` and running `vite`. Then, in your jupyter notebook, create a widget instance with the argument `dev=True` to tell it to listen for updates on the dev server.
+db_specification = formats.omop() # also available: mimiciv(), eicu()
+dataset = GenericDataset(sql_connection_string, db_specification)
 
-## Getting Started with the Query Engine
+query_engine = QueryEngine(dataset)
+# see demo.ipynb for further options, such as configuring a variable store
 
-To try the query engine, you can run `python OMOPQueryEngine/test.py`. The code at the bottom of this script shows an example of how to load a sample dataset and run basic queries on it.
+query_engine.list_data_elements(scope="Measurement") # returns a dataframe of Measurement concepts
 
-## Getting Started with the Local Database
+query_engine.query("{Temperature Celsius; scope = Measurement}") # retrieves temperature measurements
+```
 
-[Drive to download the MIMIC-IV OMOP CDM data](https://drive.google.com/file/d/1_C0MBWa-Ku1DDD5532S_IFA75hYhEjE0/view?usp=sharing) and put them under the `OMOPQueryEngine` directory.
+You can access the interactive query authoring environment like so:
+
+```python
+query_engine.interactive(file_path=..., api_key=...)
+```
+
+Both `file_path` and `api_key` are optional. `file_path` allows you to read and
+write queries from a local JSON file, enabling you to persist the queries that you
+create in the interactive session. `api_key` can be a Gemini API key allowing you
+to use LLMs to author, update, explain, and debug queries.
+
+## Dev Notes
+
+**Running the dev server:** Make sure you have NodeJS version 20 or later. `cd` into the `client` directory, run `npm install`, then `npm run dev`. Then in your call to `QueryEngine.interactive`, set `dev=True`. Now when you change the frontend source code, the widget will automatically update.
+
+If the Vite dev server stops working after you make some changes (it may show a JavaScript error like 'failed to load model'), check that any imports of TypeScript types are prefixed with the word `type`.

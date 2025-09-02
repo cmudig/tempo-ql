@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { faCode, faDatabase } from '@fortawesome/free-solid-svg-icons';
-  import ThemeToggle from './ThemeToggle.svelte';
+  import { faChartSimple, faDatabase } from '@fortawesome/free-solid-svg-icons';
   import Fa from 'svelte-fa';
+  import ThemeToggle from './ThemeToggle.svelte';
 
   export let activeTab: string = 'query-inspector';
   export let onTabChange: (tab: string) => void = () => {};
 
   const tabs = [
-    { id: 'query-inspector', label: 'Query Inspector', icon: faCode },
+    { id: 'results', label: 'Query Results', icon: faChartSimple },
     { id: 'data-elements', label: 'Data Elements', icon: faDatabase },
   ];
 </script>

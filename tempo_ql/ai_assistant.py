@@ -338,7 +338,7 @@ Output:
                             query_filter = ConceptFilter(*query_filter[query_field])
                             # Use provided scope or None (which searches all scopes)
                             scope = args.get("scope", None)
-                            available_names = self.query_engine.dataset.list_names(scope=scope, return_counts=True)
+                            available_names = self.query_engine.dataset.list_data_elements(scope=scope, return_counts=True)
                             matching_names = available_names[query_filter.filter_series(available_names[query_field])]
                             function_response = json.dumps(matching_names.head(100).to_dict(orient='records'))
                             if len(matching_names) >= 100:

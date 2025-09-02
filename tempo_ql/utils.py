@@ -199,3 +199,34 @@ def convert_to_native_types(o):
         if isinstance(v, float): return round(v, 6)
         return v
     return o
+
+def flatten_dict(nested_dict, base_key=None):
+    """
+    Converts the nested dictionary to a single flat dictionary with keys that are
+    tuples of the original keys.
+    """
+    result = {}
+    for k, v in nested_dict.items():
+        child_key = (*base_key, k) if base_key is not None else (k,)
+        if isinstance(v, dict):
+            result.update(flatten_dict(v, base_key=child_key))
+        else:
+            result[child_key] = v
+    return result
+
+def unflatten_dict(flat_dict):
+    """
+    Reverses flatten_dict.
+    """
+    result = {}
+    def place(d, k, v):
+        if isinstance(k, tuple) and len(k) > 1:
+            d.setdefault(k, {})
+            place(d[k], k[1:], v)
+        elif isinstance(k, tuple):
+            d[k[0]] = v
+        else:
+            d[k] = v
+    for k, v in flat_dict.items():
+        place(result, k, v)
+    return result

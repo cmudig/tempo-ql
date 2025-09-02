@@ -87,7 +87,7 @@
   $: apiStatusInfo = getApiStatusInfo(apiStatus);
 </script>
 
-<div class="px-4 pb-4 {width} h-full flex flex-col">
+<div class="px-4 pb-2 {width} h-full flex flex-col">
   <!-- Header with API Status -->
   <div class="flex items-center mb-4 gap-2 shrink-0">
     <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 pr-2">

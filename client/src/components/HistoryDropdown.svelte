@@ -45,7 +45,7 @@
 {#if isVisible}
   <!-- Backdrop -->
   <div
-    class="absolute top-0 left-0 w-full h-full bg-white/80 z-40"
+    class="absolute top-0 left-0 w-full h-full bg-white/80 dark:bg-gray-900/80 z-40"
     on:click|stopPropagation={handleClickOutside}
   ></div>
 
@@ -60,7 +60,7 @@
       <div
         class="flex items-center justify-between px-4 py-2 bg-gray-200 dark:bg-gray-700 dark:text-white"
       >
-        <h3 class="font-medium text-gray-900">Query History</h3>
+        <h3 class="font-medium">Query History</h3>
         <button
           on:click={onClose}
           class="text-gray-600 dark:text-gray-300 hover:opacity-50 transition-colors p-2"

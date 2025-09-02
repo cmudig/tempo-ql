@@ -3,9 +3,13 @@ import anywidget
 import traitlets
 import datetime
 import traceback
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, TextIO
+from collections.abc import MutableMapping
+import json
 
-from .evaluator import QueryEngine
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .evaluator import QueryEngine
 from .ai_assistant import AIAssistant
 from .utils import make_query_result_summary
 
@@ -29,6 +33,12 @@ class TempoQLWidget(anywidget.AnyWidget):
     """
     
     # ==== CORE TRAITLETS ====
+    
+    # File contents
+    file_contents = traitlets.Dict({}).tag(sync=True)
+    file_path = traitlets.Any(allow_none=True)
+    _save_path = traitlets.Unicode('').tag(sync=True)
+    
     # Query input and processing
     text_input = traitlets.Unicode("").tag(sync=True)
     process_trigger = traitlets.Unicode("").tag(sync=True)
@@ -68,13 +78,18 @@ class TempoQLWidget(anywidget.AnyWidget):
     query_history = traitlets.List([]).tag(sync=True)
     ai_history = traitlets.List([]).tag(sync=True)
     
-    def __init__(self, query_engine: Optional[QueryEngine] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
+    def __init__(self, query_engine: Optional["QueryEngine"] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
         """
         Initialize the Tempo-QL widget.
         
         Args:
             query_engine: QueryEngine instance for data processing
+            variable_store: A dict-like object that will be used to store variable results
             api_key: Google Gemini API key for AI features
+            source_file: A path to file or file contents containing existing queries. If
+                a path to a JSON file is given, the widget will write to the file
+                as you update the queries. If the file does not exist, the widget
+                will attempt to write to this file.
             dev: Use development assets instead of production build
         """
         # Load frontend assets
@@ -84,7 +99,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         super().__init__(*args, **kwargs)
         
         # Initialize core components
-        self._init_components(query_engine, api_key)
+        self._init_components(query_engine, variable_store, api_key)
         
         # Initialize data and UI state
         self._init_data_state()
@@ -103,10 +118,37 @@ class TempoQLWidget(anywidget.AnyWidget):
                 "No built widget source found, and dev is set to False. "
                 "To resolve, run 'npx vite build' from the client directory."
             )
+            
+    @traitlets.observe("file_path")
+    def updated_file_path(self, change=None):
+        if isinstance(self.file_path, str):
+            self.file_path = pathlib.Path(self.file_path)
+            return
+        
+        if self.file_path is not None and isinstance(self.file_path, pathlib.Path):
+            self._save_path = self.file_path.name
+            if self.file_path.exists():
+                self.file_contents = json.loads(self.file_path.read_text())
+                # Check that the types match expectations: each value should be either a string or dict containing more strings or dicts of strings, etc.
+                def _validate_file_contents(obj):
+                    if isinstance(obj, str):
+                        return True
+                    elif isinstance(obj, dict):
+                        return all(_validate_file_contents(v) for v in obj.values())
+                    return False
 
-    def _init_components(self, query_engine: Optional[QueryEngine], api_key: Optional[str]):
+                if not _validate_file_contents(self.file_contents):
+                    raise ValueError("File contents must be a nested structure of dicts/strings.")
+            else:
+                self.file_contents = {}
+        else:
+            self._save_path = ''
+            self.file_contents = {}
+
+    def _init_components(self, query_engine: Optional["QueryEngine"], variable_store: Optional[MutableMapping], api_key: Optional[str]):
         """Initialize core widget components."""
         self.query_engine = query_engine
+        self.variable_store = variable_store
         self.last_sql_query = None
         self.data = None
         
@@ -127,7 +169,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self.ids_length = len(self.ids)
             
             # Get concept names
-            names_df = self.query_engine.dataset.list_names(return_counts=True)
+            names_df = self.query_engine.dataset.list_data_elements(return_counts=True)
             self.list_names = (
                 names_df['name'].tolist() 
                 if hasattr(names_df, 'name') and 'name' in names_df.columns 
@@ -184,7 +226,7 @@ class TempoQLWidget(anywidget.AnyWidget):
 
     # ==== QUERY PROCESSING ====
     
-    def execute_query(self, query: str):
+    def execute_query(self, var_name: Optional[str], query: str):
         """
         Execute a TempoQL query with comprehensive error handling.
         
@@ -205,7 +247,9 @@ class TempoQLWidget(anywidget.AnyWidget):
         
         # Execute query
         self._set_loading(True, "Running query...")
-        result, subqueries = self.query_engine.query(query, return_subqueries=True)
+        result, subqueries = self.query_engine.query(query, variable_store=self.variable_store, return_subqueries=True)
+        if var_name is not None and self.variable_store is not None:
+            self.variable_store[var_name] = result
         
         # Process successful query
         self._set_loading(True, "Processing results...")
@@ -245,7 +289,7 @@ class TempoQLWidget(anywidget.AnyWidget):
     def analyze_scope(self, scope_name: str, force_refresh: bool = False):
         """Analyze a data scope using the ScopeAnalyzer."""
         self._set_loading(True, "Loading scopes...")
-        concepts = self.query_engine.dataset.list_names(scope=scope_name, return_counts=True, cache_only=not force_refresh)
+        concepts = self.query_engine.dataset.list_data_elements(scope=scope_name, return_counts=True, cache_only=not force_refresh)
         if not len(concepts):
             self._set_loading(False)
             return None
@@ -297,11 +341,12 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.query_for_results = query
         self.query_error = ""
         self.llm_explanation = ""
-        print(f"🔍 Processing query: {query}")
         
+        var_name = self.process_trigger[len('variable:'):] if self.process_trigger.startswith('variable:') else None
+        print(f"🔍 Processing query: {query}, {var_name}")
         try:
             self._set_loading(True, "Checking query...")
-            self.execute_query(query)
+            self.execute_query(var_name, query)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             print(f"❌ Unexpected error: {error_msg}")
@@ -408,3 +453,10 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.llm_loading = False
         self.llm_trigger = ""
         self.llm_question = ""
+
+    @traitlets.observe("file_contents")
+    def write_file_contents(self, change=None):
+        new_contents = change.new if change is not None else self.file_contents
+        
+        if self.file_path is not None:
+            self.file_path.write_text(json.dumps(new_contents, indent=2))

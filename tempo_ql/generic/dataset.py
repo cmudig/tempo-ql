@@ -938,7 +938,7 @@ class GenericDataset:
                 ]))
             conn.commit()
             
-    def list_names(self, scope=None, return_counts=False, cache_only=False):
+    def list_data_elements(self, scope=None, return_counts=False, cache_only=False):
         """
         Retrieve a dataframe containing the applicable names for attributes, events 
         or intervals within the given scope (or if None, then all scopes). If True, 

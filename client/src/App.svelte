@@ -1,15 +1,13 @@
 <script lang="ts">
   import { createBackendConnection } from './utils/backend';
-  import { theme } from './stores/theme';
 
   // Import all modular components
   import TabBar from './components/TabBar.svelte';
   import DataElementsTab from './components/DataElementsTab.svelte';
-  import QueryInspectorTab from './components/QueryInspectorTab.svelte';
-  import StatusFooter from './components/StatusFooter.svelte';
-  import ThemeToggle from './components/ThemeToggle.svelte';
+  import QueryResultsTab from './components/QueryResultsTab.svelte';
   import LoadingBar from './components/LoadingBar.svelte';
   import HistoryDropdown from './components/HistoryDropdown.svelte';
+  import EditorView from './components/EditorView.svelte';
 
   export let model;
 
@@ -18,6 +16,8 @@
 
   // Destructure stores and functions for cleaner usage
   const {
+    savePath,
+    fileContents,
     values,
     listNames,
     runQuery,
@@ -40,17 +40,18 @@
     hasExtractedQuery,
     handleQueryExtraction,
     textInput,
+    queryForResults,
     queryHistory,
     aiHistory,
   } = backend;
 
   let selectedScope: string = '';
 
-  // Get data fields from backend list_names (now a simple list)
+  // Get data fields from backend list_data_elements (now a simple list)
   $: dataFields = $listNames || [];
 
   // Tab state
-  let activeTab = 'query-inspector';
+  let activeTab = 'data-elements';
 
   // History dropdown state
   let showAIHistoryDropdown = false;
@@ -62,6 +63,8 @@
   // Track history dropdown position
   let historyDropdownPosition = { top: 0, left: 0 };
   let queryHistoryDropdownPosition = { top: 0, left: 0 };
+
+  let currentQueryPath: string[] = [];
 
   // Handle LLM question submission (now handled by backend)
   function handleLLMQuestionSubmit(question: string) {
@@ -78,8 +81,14 @@
   function handleRun() {
     console.log('text input', $textInput);
     if ($textInput.trim()) {
-      runQuery($textInput);
+      runQuery(
+        currentQueryPath.length > 0
+          ? currentQueryPath[currentQueryPath.length - 1]
+          : null,
+        $textInput
+      );
     }
+    activeTab = 'results';
   }
 
   // Handle history button click - toggle dropdown
@@ -135,58 +144,73 @@
 </script>
 
 <main
-  class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex flex-col"
-  style="height: 600px;"
+  class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex"
+  style="height: min(600px, max(400px, 70vh));"
 >
-  <!-- Tab Bar -->
-  <TabBar {activeTab} onTabChange={handleTabChange} />
+  <EditorView
+    bind:fileContents={$fileContents}
+    savePath={$savePath}
+    bind:textInput={$textInput}
+    bind:aiQuestion={currentQuestion}
+    bind:currentQueryPath
+    {dataFields}
+    onRun={handleRun}
+    onExplain={handleLLMExplanation}
+    onLLMSubmit={handleLLMQuestionSubmit}
+    llmResponse={$llmResponse}
+    llmLoading={$llmLoading}
+    llmError={$llmError}
+    llmAvailable={$llmAvailable}
+    apiStatus={$apiStatus}
+    extractedQuery={$extractedQuery}
+    hasExtractedQuery={$hasExtractedQuery}
+    onQueryExtracted={handleQueryExtraction}
+    onHistoryClick={handleHistoryClick}
+    onQueryHistoryClick={handleQueryHistoryClick}
+  />
 
-  <!-- Tab Content -->
-  <div class="flex-auto w-full min-h-0 z-0">
-    {#if activeTab === 'data-elements'}
-      <DataElementsTab
-        width="w-full"
-        scopes={$scopes}
-        bind:selectedScope
-        scopeConcepts={$scopeConcepts}
-        isLoading={$isLoading}
-        loadingMessage={$loadingMessage}
-        onScopeSelect={(scope) => {
-          handleScopeAnalysis(scope, false);
-        }}
-        onAnalyzeScope={(scope) => {
-          handleScopeAnalysis(scope, true);
-        }}
-        onInsert={(scope, selection) => {
-          $textInput = $textInput + `{${selection}; scope = ${scope}}`;
-          activeTab = 'query-inspector';
-        }}
-      />
-    {:else if activeTab === 'query-inspector'}
-      <QueryInspectorTab
-        bind:textInput={$textInput}
-        bind:aiQuestion={currentQuestion}
-        {dataFields}
-        onRun={handleRun}
-        onExplain={handleLLMExplanation}
-        queryError={$queryError}
-        values={$values}
-        subqueries={$subqueries}
-        onLLMSubmit={handleLLMQuestionSubmit}
-        llmResponse={$llmResponse}
-        llmLoading={$llmLoading}
-        llmError={$llmError}
-        llmAvailable={$llmAvailable}
-        apiStatus={$apiStatus}
-        extractedQuery={$extractedQuery}
-        llmExplanation={$llmExplanation}
-        hasExtractedQuery={$hasExtractedQuery}
-        onQueryExtracted={handleQueryExtraction}
-        onHistoryClick={handleHistoryClick}
-        onQueryHistoryClick={handleQueryHistoryClick}
-        width="w-full"
-      />
-    {/if}
+  <div class="w-1/2 mb-2">
+    <div
+      class="w-full h-full rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"
+    >
+      <!-- Tab Bar -->
+      <TabBar {activeTab} onTabChange={handleTabChange} />
+
+      <!-- Tab Content -->
+      <div class="flex-auto w-full min-h-0 z-0">
+        {#if activeTab === 'results'}
+          <QueryResultsTab
+            bind:textInput={$textInput}
+            queryForResults={$queryForResults}
+            onRun={handleRun}
+            onExplain={handleLLMExplanation}
+            queryError={$queryError}
+            values={$values}
+            subqueries={$subqueries}
+            llmAvailable={$llmAvailable}
+            llmExplanation={$llmExplanation}
+            width="w-full"
+          />
+        {:else if activeTab === 'data-elements'}
+          <DataElementsTab
+            scopes={$scopes}
+            bind:scopeName={selectedScope}
+            scopeConcepts={$scopeConcepts}
+            isLoading={$isLoading}
+            loadingMessage={$loadingMessage}
+            onScopeSelect={(scope) => {
+              handleScopeAnalysis(scope, false);
+            }}
+            onAnalyze={() => {
+              handleScopeAnalysis(selectedScope, true);
+            }}
+            onInsert={(scope, selection) => {
+              $textInput = $textInput + `{${selection}; scope = ${scope}}`;
+            }}
+          />
+        {/if}
+      </div>
+    </div>
   </div>
 
   <!-- History Dropdown Component -->

@@ -2,15 +2,15 @@ import lark
 import re
 import csv
 import datetime
+from pathlib import Path
 from .data_types import *
+from .utils import flatten_dict, unflatten_dict
 import json
 import os
 import uuid
 import logging
 import random
 import tqdm
-from .utils import convert_to_native_types
-from .filesystem import LocalFilesystem
 
 GRAMMAR = """
 start: variable_expr | variable_list
@@ -493,7 +493,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
 
     def agg_expr(self, tree):
         agg_method = self.visit(tree.children[0])
-        expr = self.visit(tree.children[1])
+        expr = self._log_subquery(tree.children[1], self.visit(tree.children[1]))
         *time_bounds, time_index = self.visit(tree.children[-1]) if tree.children[-1] is not None else self.time_bounds(lark.Tree('time_bounds', [
             lark.Token('FROM', ''), 
             lark.Tree('min_time', []),
@@ -1047,83 +1047,8 @@ class EvaluateQuery(lark.visitors.Interpreter):
             return self.visit(tree.children[0])
         return tree.children[0]
     
-class QueryResultCache:
-    """
-    Saves query results (optionally pre-discretized) to a cache directory. Query
-    results can also be saved to an in-memory cache if desired.
-    """
-    def __init__(self, cache_dir):
-        super().__init__()
-        assert cache_dir is not None, "Cache directory must be provided"
-        self.cache_dir = LocalFilesystem(cache_dir) if isinstance(cache_dir, str) else cache_dir
-        self._query_cache = {}
-        self._in_memory_cache = {} # for items to be stored in memory instead of loaded from disk every time
-    
-    def load_cache(self):
-        if not self.cache_dir: return
-        
-        # Load cache information
-        if self.cache_dir.exists("query_cache.json"):
-            self._query_cache = self.cache_dir.read_file("query_cache.json")
-        else:
-            self._query_cache = {}
-            
-    def _make_cache_key(self, tree, time_index_tree, transform_info):
-        return (str(tree) + 
-                ("_" + str(time_index_tree) if time_index_tree is not None else "") + 
-                ("_" + str(transform_info) if transform_info is not None else ""))
-    
-    def lookup(self, tree, time_index_tree=None, transform_info=None, save_in_memory=False):
-        """Returns the result of a variable parse if it exists in the cache."""
-        self.load_cache()
-        query_cache_key = self._make_cache_key(tree, time_index_tree, transform_info)
-        
-        if query_cache_key in self._in_memory_cache:
-            return self._in_memory_cache[query_cache_key]
-        elif query_cache_key in self._query_cache:
-            result_info = self._query_cache[query_cache_key]
-            if "time_index_tree" in result_info:
-                index = self.lookup("time_index_" + result_info["time_index_tree"], time_index_tree=None, save_in_memory=True)
-            else:
-                index = None
-            if not self.cache_dir.exists(result_info["fname"]): return
-            df = self.cache_dir.read_file(result_info["fname"], format="feather")
-            result = TimeSeriesQueryable.deserialize(result_info["meta"], df, **({"index": index} if index is not None else {}))
-            if transform_info is not None:
-                result = (result, result_info.get("transform_data", None))
-            if save_in_memory:
-                self._in_memory_cache[query_cache_key] = result
-            return result
-        return None
-        
-    def save(self, tree, result, time_index_tree=None, transform_info=None, transform_data=None):
-        """Saves the given result object to the cache for the given tree description."""
-        query_cache_name = self._make_cache_key(tree, time_index_tree, transform_info)
-        if query_cache_name in self._query_cache and (time_index_tree is None or "time_index_" + str(time_index_tree) in self._query_cache):
-            return
-        
-        if time_index_tree is not None and isinstance(result, (TimeSeries, TimeSeriesSet)):
-            time_index_key = "time_index_" + str(time_index_tree)
-            if time_index_key not in self._query_cache:
-                self.save(time_index_key, result.index)
-            meta, df = result.serialize(include_index=False)
-        else:
-            meta, df = result.serialize()
-            
-        fname = ('%015x' % random.randrange(16**15)) + ".arrow" # 15-character long random hex string
-        self._query_cache[query_cache_name] = {
-            "meta": meta,
-            "fname": fname,
-            **({"time_index_tree": str(time_index_tree)} if time_index_tree is not None else {})
-        }
-        if transform_data is not None:
-            self._query_cache[query_cache_name]["transform_data"] = convert_to_native_types(transform_data)
-        self.cache_dir.write_file(df.rename(columns={c: str(c) for c in df.columns}).reset_index(drop=True), fname, format='feather')
-        self.cache_dir.write_file(self._query_cache, "query_cache.json")
-
-    
 class QueryEngine:
-    def __init__(self, dataset, eventtype_macros=None, cache_fs=None, variable_stores=None):
+    def __init__(self, dataset, eventtype_macros=None, variable_stores=None):
         """
         variable_stores can be a list of dictionary-like objects that store variables.
         """
@@ -1132,23 +1057,112 @@ class QueryEngine:
         self.parser = lark.Lark(GRAMMAR, parser="earley")
         self.eventtype_macros = eventtype_macros
         self.variable_stores = variable_stores
-        if cache_fs is not None: self.cache = QueryResultCache(cache_fs)
-        else: self.cache = None
         
     def get_ids(self):
         return self.dataset.get_ids()
     
-    def query(self, query_string, variable_transform=None, use_cache=True, update_fn=None, return_subqueries=False):
+    def query(self, query_string, variable_transform=None, update_fn=None, variable_store=None, return_subqueries=False):
+        stores = [*([variable_store] if variable_store is not None and variable_store not in self.variable_stores else []), *self.variable_stores]
         query_evaluator = EvaluateQuery(self.dataset, 
                                         eventtype_macros=self.eventtype_macros, 
                                         variable_transform=variable_transform,
-                                        variable_stores=self.variable_stores,
-                                        cache=self.cache if use_cache else None, 
+                                        variable_stores=stores,
                                         update_fn=update_fn,
                                         verbose=True)
         tree = self.parse(query_string)
         result = query_evaluator.visit(tree, query_string=query_string, return_subqueries=return_subqueries)
         return result
+    
+    def _get_variable_references(self, query):
+        tree = self.parse(query)
+        return list(str(x) for x in tree.scan_values(lambda n: isinstance(n, lark.Tree) and n.data == 'var_name'))
+    
+    def get_compute_order(self, queries):
+        """
+        Given a dictionary of variable name tuple -> query string, returns an ordering of variables
+        such that dependencies are computed before dependents.
+
+        Raises ValueError if there are cycles or self-references.
+        """
+        # Build dependency graph
+        deps = {}
+        for var, query in queries.items():
+            refs = set(self._get_variable_references(query))
+            if var[-1] in refs:
+                raise ValueError(f"Variable '{var[-1]}' refers to itself in its own computation.")
+            # Only keep references that are also variables in the dictionary
+            deps[var] = {r for r in queries if r[-1] in refs}
+
+        # States: 0 = unvisited, 1 = visiting, 2 = visited
+        state = {var: 0 for var in queries}
+        order = []
+
+        def dfs(v):
+            if state[v] == 1:
+                raise ValueError(f"Dependency cycle detected involving '{v[-1]}' - please update your variable definitions.")
+            if state[v] == 2:
+                return
+            state[v] = 1
+            for u in deps[v]:
+                dfs(u)
+            state[v] = 2
+            order.append(v)
+
+        for var in queries:
+            if state[var] == 0:
+                dfs(var)
+
+        return order
+
+    def query_from(self, query_source, flatten=True, variable_store=None, **kwargs):
+        """
+        Computes query results from the given object, which can be a single query
+        string, a (possibly nested) dictionary of names mapping to query strings
+        or other dictionaries, or a path to a file containing the same dictionary
+        format.
+        
+        flatten: If True (default), return the results for nested dictionaries
+            as a single flat dictionary.
+        variable_store: If provided, should be a dict-like object that can store
+            intermediate variable results. This could be part of the variable_stores
+            passed to the QueryEngine constructor; if it is not, then it will
+            take precedence in any variable lookups during the query execution.
+        kwargs: Arguments to pass to .query().
+        """
+        if isinstance(query_source, (str, Path)):
+            if isinstance(query_source, str): 
+                if not os.path.splitext(query_source)[1]:
+                    queries = query_source
+                else:
+                    query_source = Path(query_source)
+            
+            if isinstance(query_source, Path):
+                if query_source.suffix == '.txt':
+                    queries = Path(query_source).read_text()
+                elif query_source.suffix == '.json':
+                    import json
+                    queries = json.loads(Path(query_source).read_text())
+                else:
+                    raise ValueError(f"Unknown file extension '{query_source.suffix}'. txt and json are supported.")
+        else:
+            queries = query_source        
+        
+        if isinstance(queries, str):
+            return self.query(queries, save_store=variable_store, **kwargs)
+        
+        flat_queries = flatten_dict(queries)
+        ordering = self.get_compute_order(flat_queries)
+
+        result = {}       
+        cache_store = variable_store if variable_store is not None else {} 
+        for var in ordering:
+            if var[-1] not in cache_store:
+                cache_store[var[-1]] = self.query(flat_queries[var], variable_store=cache_store, **kwargs)
+            result[var] = cache_store[var[-1]]
+        
+        if flatten:
+            return {k[-1]: v for k, v in result.items()}
+        return unflatten_dict(result)
     
     def parse(self, query, keep_all_tokens=False):
         if keep_all_tokens:
@@ -1172,3 +1186,23 @@ class QueryEngine:
     def get_last_sql_query(self):
         """Get the last SQL query that was executed by the dataset"""
         return getattr(self.dataset, 'last_sql_query', None)
+
+    def interactive(self, **kwargs):
+        """
+        Start an interactive notebook widget to run queries.
+        
+        Args:
+        * file_path: A string or Path object pointing to a JSON file in which
+            to save collections of queries (results are not saved here). If this
+            path does not exist, a new file will be created.
+        * variable_store: A dict-like object (such as dict, DatabaseVariableStore, 
+            or FileVariableStore) to save query results to, if using a file path.
+        * api_key: Pass a Gemini API key to enable LLM-based authoring,
+            explanation, and debugging features. The only data passed to the LLM
+            is a dictionary of table info (returned by 
+            self.dataset.get_table_context()) and concept information returned by 
+            self.dataset.list_names().
+        * dev: Pass True to use the autoreloading frontend dev server.
+        """
+        from .widget import TempoQLWidget
+        return TempoQLWidget(self, **kwargs)

@@ -23,6 +23,10 @@ a:hover {
   color: #535bf2;
 }
 
+button {
+  @apply whitespace-nowrap;
+}
+
 body {
   margin: 0;
   display: flex;
@@ -176,7 +180,7 @@ select.flat-select-small {
 
 select.flat-select,
 select.flat-select-small {
-  @apply bg-gray-50 border border-gray-300 text-gray-900;
+  @apply bg-gray-50 border border-gray-300 text-gray-900 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100;
 }
 
 .flat-select {

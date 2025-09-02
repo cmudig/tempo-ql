@@ -15,8 +15,14 @@ export interface BackendModel {
 }
 
 export function createBackendConnection(model: BackendModel) {
-  const type = traitlet(model, 'type', 'meds');
   const values = traitlet(model, 'values', {});
+
+  // each key is a name of a variable or a group. The value can be another
+  // dictionary of variables/groups or a string representing a Tempo query
+  const fileContents = traitlet(model, 'file_contents', {});
+
+  const savePath = traitlet(model, '_save_path', '');
+
   const listNames = traitlet(model, 'list_names', {
     attributes: [],
     events: [],
@@ -27,6 +33,7 @@ export function createBackendConnection(model: BackendModel) {
 
   // Text input traitlet
   const textInput = traitlet(model, 'text_input', '');
+  const queryForResults = traitlet(model, 'query_for_results', '');
 
   // Data Elements tab traitlet
   const scopes = traitlet(model, 'scopes', []);
@@ -56,8 +63,10 @@ export function createBackendConnection(model: BackendModel) {
 
   return {
     // Reactive stores
-    type,
     values,
+    queryForResults,
+    savePath,
+    fileContents,
     listNames,
     subqueries,
     queryError,
@@ -77,9 +86,12 @@ export function createBackendConnection(model: BackendModel) {
     queryHistory,
     aiHistory,
 
-    runQuery: (textInput: string) => {
+    runQuery: (variableName: string | null, textInput: string) => {
       model.set('text_input', textInput);
-      model.set('process_trigger', 'run');
+      model.set(
+        'process_trigger',
+        variableName != null ? `variable:${variableName}` : 'run'
+      );
       model.save_changes();
     },
 
