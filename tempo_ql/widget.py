@@ -4,6 +4,7 @@ import traitlets
 import datetime
 import traceback
 from typing import Optional, Tuple, Any, TextIO
+from collections.abc import MutableMapping
 import json
 
 from .evaluator import QueryEngine
@@ -75,12 +76,13 @@ class TempoQLWidget(anywidget.AnyWidget):
     query_history = traitlets.List([]).tag(sync=True)
     ai_history = traitlets.List([]).tag(sync=True)
     
-    def __init__(self, query_engine: Optional[QueryEngine] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
+    def __init__(self, query_engine: Optional[QueryEngine] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
         """
         Initialize the Tempo-QL widget.
         
         Args:
             query_engine: QueryEngine instance for data processing
+            variable_store: A dict-like object that will be used to store variable results
             api_key: Google Gemini API key for AI features
             source_file: A path to file or file contents containing existing queries. If
                 a path to a JSON file is given, the widget will write to the file
@@ -95,7 +97,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         super().__init__(*args, **kwargs)
         
         # Initialize core components
-        self._init_components(query_engine, api_key)
+        self._init_components(query_engine, variable_store, api_key)
         
         # Initialize data and UI state
         self._init_data_state()
@@ -141,9 +143,10 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._save_path = ''
             self.file_contents = {}
 
-    def _init_components(self, query_engine: Optional[QueryEngine], api_key: Optional[str]):
+    def _init_components(self, query_engine: Optional[QueryEngine], variable_store: Optional[MutableMapping], api_key: Optional[str]):
         """Initialize core widget components."""
         self.query_engine = query_engine
+        self.variable_store = variable_store
         self.last_sql_query = None
         self.data = None
         
@@ -221,7 +224,7 @@ class TempoQLWidget(anywidget.AnyWidget):
 
     # ==== QUERY PROCESSING ====
     
-    def execute_query(self, query: str):
+    def execute_query(self, var_name: Optional[str], query: str):
         """
         Execute a TempoQL query with comprehensive error handling.
         
@@ -242,7 +245,9 @@ class TempoQLWidget(anywidget.AnyWidget):
         
         # Execute query
         self._set_loading(True, "Running query...")
-        result, subqueries = self.query_engine.query(query, return_subqueries=True)
+        result, subqueries = self.query_engine.query(query, variable_store=self.variable_store, return_subqueries=True)
+        if var_name is not None and self.variable_store is not None:
+            self.variable_store[var_name] = result
         
         # Process successful query
         self._set_loading(True, "Processing results...")
@@ -334,11 +339,12 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.query_for_results = query
         self.query_error = ""
         self.llm_explanation = ""
-        print(f"🔍 Processing query: {query}")
         
+        var_name = self.process_trigger[len('variable:'):] if self.process_trigger.startswith('variable:') else None
+        print(f"🔍 Processing query: {query}, {var_name}")
         try:
             self._set_loading(True, "Checking query...")
-            self.execute_query(query)
+            self.execute_query(var_name, query)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             print(f"❌ Unexpected error: {error_msg}")

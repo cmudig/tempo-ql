@@ -1,11 +1,15 @@
 <script lang="ts">
   import {
-    createNewQueryRecursive,
+    createNewQuery,
     deleteQueryItem,
     duplicateQueryItem,
+    getQueryItem,
     moveQueryItem,
+    placeQueryItem,
     QueryFile,
     queryItemExists,
+    queryNameExistsAnywhere,
+    queryNameValid,
     updateQueryItem,
   } from './file_browser/queryfile';
   import AIAssistantSection from './AIAssistantSection.svelte';
@@ -23,6 +27,7 @@
   import QueryFileBrowser from './file_browser/QueryFileBrowser.svelte';
   import Hoverable from '../utils/Hoverable.svelte';
   import { onDestroy, onMount } from 'svelte';
+  import { areObjectsEqual } from '../utils/utils';
 
   export let fileContents: QueryFile = {};
   export let savePath: string = '';
@@ -49,9 +54,20 @@
 
   let showingBrowser: boolean = false;
 
-  let currentQueryPath: string[] = [];
+  export let currentQueryPath: string[] = [];
 
   function handleQuerySelection(path: string[], query: string) {
+    if (
+      currentQueryPath.length > 0 &&
+      textInput != getQueryItem(fileContents, currentQueryPath)
+    ) {
+      if (
+        !confirm(
+          `You have unsaved changes for ${currentQueryPath[currentQueryPath.length - 1]}. Proceed without saving changes?`
+        )
+      )
+        return;
+    }
     currentQueryPath = path;
     textInput = query;
     showingBrowser = false;
@@ -77,6 +93,12 @@
   function renameQuery(newName: string) {
     isEditingName = false;
     if (newName == currentQueryPath[currentQueryPath.length - 1]) return;
+    if (!queryNameValid(newName)) {
+      alert(
+        'Queries must have variable-style names, containing only alphanumeric characters or underscores, and they must not start with a number.'
+      );
+      return;
+    }
     if (
       queryItemExists(fileContents, [
         ...currentQueryPath.slice(0, currentQueryPath.length - 1),
@@ -97,6 +119,27 @@
     ];
   }
 
+  function onSaveAs(name: string) {
+    if (!queryNameValid(name)) {
+      alert(
+        'Queries must have variable-style names, containing only alphanumeric characters or underscores, and they must not start with a number.'
+      );
+      return;
+    }
+    if (queryNameExistsAnywhere(fileContents, name)) {
+      alert(
+        'The variable name already exists. All variable names must be unique.'
+      );
+      return;
+    }
+    let newPath = [
+      ...currentQueryPath.slice(0, currentQueryPath.length - 1),
+      name,
+    ];
+    fileContents = placeQueryItem(fileContents, newPath, textInput);
+    currentQueryPath = newPath;
+  }
+
   function duplicateQuery() {
     let result = duplicateQueryItem(fileContents, currentQueryPath);
     fileContents = result.contents;
@@ -112,7 +155,6 @@
       fileContents = deleteQueryItem(fileContents, currentQueryPath);
       currentQueryPath = [];
     }
-    console.error('deletin');
   }
 
   function runAndSaveQuery() {
@@ -247,7 +289,7 @@
         </div>
         <button
           on:click={() => {
-            let result = createNewQueryRecursive(
+            let result = createNewQuery(
               fileContents,
               currentQueryPath.slice(0, currentQueryPath.length - 1)
             );
@@ -280,7 +322,8 @@
         {onExplain}
         onHistoryClick={onQueryHistoryClick}
         width="w-full"
-        savesOnRun={!!savePath}
+        allowSave={!!savePath}
+        {onSaveAs}
       />
     </div>
 

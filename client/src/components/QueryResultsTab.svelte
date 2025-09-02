@@ -8,6 +8,7 @@
   export let textInput: string = '';
   export let onRun: () => void = () => {};
   export let onExplain: () => void = () => {};
+  export let queryForResults: string = '';
   export let queryError: string = '';
   export let values: any = {};
   export let subqueries: any = {};
@@ -18,7 +19,12 @@
   export let llmExplanation: string = '';
 </script>
 
-<div class="flex-auto p-4 h-full overflow-auto">
+<div
+  class="flex-auto p-4 h-full overflow-auto"
+  class:opacity-50={!!values &&
+    Object.keys(values).length > 0 &&
+    textInput != queryForResults}
+>
   {#if !!queryError}
     <div
       class="bg-red-50 dark:bg-red-800/40 rounded-lg border border-red-200 dark:border-red-400 p-4 mb-4"

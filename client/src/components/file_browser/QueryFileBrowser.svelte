@@ -10,6 +10,7 @@
     moveQueryItem,
     QueryFile,
     queryItemExists,
+    queryNameValid,
   } from './queryfile';
   import { faListDots, faPlus } from '@fortawesome/free-solid-svg-icons';
   import { areObjectsEqual } from '../../utils/utils';
@@ -31,6 +32,15 @@
 
   function moveItem(src: string[], dst: string[]) {
     if (areObjectsEqual(src, dst)) return;
+    if (
+      typeof getQueryItem(fileContents, src) === 'string' &&
+      !queryNameValid(dst[dst.length - 1])
+    ) {
+      alert(
+        'Queries must have variable-style names, containing only alphanumeric characters or underscores, and they must not start with a number.'
+      );
+      return;
+    }
     if (queryItemExists(fileContents, dst)) {
       alert(
         'An item with this name already exists - all items must have unique names.'

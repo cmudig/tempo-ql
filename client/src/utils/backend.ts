@@ -33,6 +33,7 @@ export function createBackendConnection(model: BackendModel) {
 
   // Text input traitlet
   const textInput = traitlet(model, 'text_input', '');
+  const queryForResults = traitlet(model, 'query_for_results', '');
 
   // Data Elements tab traitlet
   const scopes = traitlet(model, 'scopes', []);
@@ -63,6 +64,7 @@ export function createBackendConnection(model: BackendModel) {
   return {
     // Reactive stores
     values,
+    queryForResults,
     savePath,
     fileContents,
     listNames,
@@ -84,9 +86,12 @@ export function createBackendConnection(model: BackendModel) {
     queryHistory,
     aiHistory,
 
-    runQuery: (textInput: string) => {
+    runQuery: (variableName: string | null, textInput: string) => {
       model.set('text_input', textInput);
-      model.set('process_trigger', 'run');
+      model.set(
+        'process_trigger',
+        variableName != null ? `variable:${variableName}` : 'run'
+      );
       model.save_changes();
     },
 

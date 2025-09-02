@@ -40,6 +40,7 @@
     hasExtractedQuery,
     handleQueryExtraction,
     textInput,
+    queryForResults,
     queryHistory,
     aiHistory,
   } = backend;
@@ -63,6 +64,8 @@
   let historyDropdownPosition = { top: 0, left: 0 };
   let queryHistoryDropdownPosition = { top: 0, left: 0 };
 
+  let currentQueryPath: string[] = [];
+
   // Handle LLM question submission (now handled by backend)
   function handleLLMQuestionSubmit(question: string) {
     currentQuestion = question; // Track the current question
@@ -78,7 +81,12 @@
   function handleRun() {
     console.log('text input', $textInput);
     if ($textInput.trim()) {
-      runQuery($textInput);
+      runQuery(
+        currentQueryPath.length > 0
+          ? currentQueryPath[currentQueryPath.length - 1]
+          : null,
+        $textInput
+      );
     }
     activeTab = 'results';
   }
@@ -144,6 +152,7 @@
     savePath={$savePath}
     bind:textInput={$textInput}
     bind:aiQuestion={currentQuestion}
+    bind:currentQueryPath
     {dataFields}
     onRun={handleRun}
     onExplain={handleLLMExplanation}
@@ -172,6 +181,7 @@
         {#if activeTab === 'results'}
           <QueryResultsTab
             bind:textInput={$textInput}
+            queryForResults={$queryForResults}
             onRun={handleRun}
             onExplain={handleLLMExplanation}
             queryError={$queryError}

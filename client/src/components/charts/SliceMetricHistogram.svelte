@@ -40,7 +40,7 @@
     );
     binFormat = format(`.${precisionFixed(precision)}f`);
     let stringLabels = Object.keys(histValues).some(
-      (v) => v.search(/[^0-9.]/) >= 0
+      (v) => v.search(/[^-0-9.]/) >= 0
     );
     console.log('string labels:', stringLabels, Object.keys(histValues));
     data = Object.entries(histValues).map((v) => ({

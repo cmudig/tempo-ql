@@ -12,16 +12,17 @@
     formatQueryForHighlights,
   } from '../utils/syntaxHighlight';
   import Fa from 'svelte-fa';
-  import { faClock, faPlay } from '@fortawesome/free-solid-svg-icons';
+  import { faClock, faPlay, faSave } from '@fortawesome/free-solid-svg-icons';
 
   export let value: string = '';
   export let onInput: (val: string) => void = () => {};
   export let width: string = 'w-full max-w-2xl';
   export let dataFields: string[] = [];
   export let onRun: () => void = () => {};
+  export let onSaveAs: (name: string) => void = () => {};
   export let onExplain: () => void = () => {};
   export let onHistoryClick: () => void = () => {};
-  export let savesOnRun: boolean = false;
+  export let allowSave: boolean = false;
 
   let textarea: HTMLTextAreaElement;
   let autocompleteContainer: HTMLDivElement;
@@ -208,6 +209,9 @@
         event.preventDefault();
         onRun();
         return;
+      } else if (event.key === 's' && !event.shiftKey && allowSave) {
+        event.preventDefault();
+        saveAs();
       }
     }
 
@@ -303,6 +307,12 @@
     // Hide autocomplete
     showAutocomplete = false;
   }
+
+  function saveAs() {
+    let name = prompt('Choose a name for the new variable:');
+    if (!name) return;
+    onSaveAs(name);
+  }
 </script>
 
 <div class="flex flex-col w-full h-full px-4 mb-2">
@@ -389,6 +399,17 @@
         History
       </button>
 
+      {#if allowSave}
+        <button
+          on:click={saveAs}
+          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
+          title="Save this query to a new variable (Ctrl+S)"
+        >
+          <Fa icon={faSave} class="inline mr-2" />
+          Save As...
+        </button>
+      {/if}
+
       <!-- Run Button -->
       <button
         class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white"
@@ -399,7 +420,7 @@
         title="Run the query on the dataset (Ctrl+Shift+Enter)"
       >
         <Fa icon={faPlay} class="inline mr-2" />
-        {savesOnRun ? 'Save and Run' : 'Run Query'}
+        {allowSave ? 'Save and Run' : 'Run Query'}
       </button>
     </div>
   </div>

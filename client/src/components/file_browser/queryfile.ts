@@ -20,10 +20,10 @@ export function createNewQuery(
   path: string[] = []
 ): { contents: QueryFile; queryPath: string[] } {
   let queryNum = 1;
-  let queryName = `Query ${queryNum}`;
+  let queryName = `Query${queryNum}`;
   while (queryNameExistsAnywhere(base, queryName)) {
     queryNum += 1;
-    queryName = `Query ${queryNum}`;
+    queryName = `Query${queryNum}`;
   }
   return {
     contents: placeQueryItem(base, [...path, queryName], ''),
@@ -77,6 +77,10 @@ export function updateQueryItem(
     ),
     [path[0]]: newContents,
   };
+}
+
+export function queryNameValid(name: string): boolean {
+  return name.search(/[^A-Za-z0-9_]/) < 0 && name.search(/^[0-9]/) < 0;
 }
 
 export function queryItemExists(base: QueryFile, path: string[]): boolean {
