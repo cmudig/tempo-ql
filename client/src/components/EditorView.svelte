@@ -228,7 +228,7 @@
           <Fa icon={faListDots} class="inline" />
         </button>
       {/if}
-      {#if currentQueryPath}
+      {#if currentQueryPath.length > 0}
         {#if isEditingName}
           <form
             class="flex-auto"

@@ -182,6 +182,29 @@ class MEDSDataset(GenericDataset):
     def get_id_field_type(self):
         return Integer if pd.api.types.is_integer_dtype(self.data[self.id_field].dtype) else String
     
+    def get_data_for_scope(self, scope, value_field=None):
+        df = self.data[self.data[self.code_field].str.startswith(scope + '/')]
+        value_field_name = value_field or self.value_fields[0]
+        sub_df = df[[self.id_field, self.time_field, self.code_field, value_field_name]].copy()
+        if value_field is None:
+            # iterate through fallback values
+            for val_field in self.value_fields[1:]:
+                sub_df[value_field_name] = sub_df[value_field_name].astype(str).where(~pd.isna(sub_df[value_field_name]), df[val_field].astype(str))
+                
+        # add concept names
+        sub_df = pd.merge(sub_df,
+                          self.concepts,
+                          how='left',
+                          left_on=self.code_field,
+                          right_on=self.concept_id_field)
+        sub_df = sub_df.assign(**{self.code_field: sub_df[self.code_field] + (" " + sub_df[self.concept_name_field]).fillna("")})
+        return Events(sub_df,
+                      type_field=self.code_field,
+                      time_field=self.time_field,
+                      id_field=self.id_field,
+                      value_field=value_field_name)
+        
+
     def list_data_elements(self, scope=None, return_counts=False, cache_only=False):
         if (scope, return_counts) in self._name_list_cache:
             return self._name_list_cache[(scope, return_counts)]

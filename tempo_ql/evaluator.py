@@ -1056,7 +1056,7 @@ class QueryEngine:
         self.dataset = dataset
         self.parser = lark.Lark(GRAMMAR, parser="earley")
         self.eventtype_macros = eventtype_macros
-        self.variable_stores = variable_stores
+        self.variable_stores = variable_stores or []
         
     def get_ids(self):
         return self.dataset.get_ids()

@@ -4,10 +4,10 @@ from sqlalchemy.types import String, DateTime
 
 DatasetFormat = namedtuple('DatasetFormat', ['tables', 'vocabularies', 'joins'])
 
-def eicu():
+def eicu(table_prefix='physionet-data.eicu_crd.'):
     tables = [
         {
-            'source': 'physionet-data.eicu_crd.infusiondrug',
+            'source': table_prefix + 'infusiondrug',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'event_type_field': 'drugname',
@@ -16,7 +16,7 @@ def eicu():
             'scope': 'Drug'
         },
         {
-            'source': 'physionet-data.eicu_crd.intakeoutput',
+            'source': table_prefix + 'intakeoutput',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'intakeoutputoffset',
@@ -29,7 +29,7 @@ def eicu():
             'scope': 'Fluids'
         },
         {
-            'source': 'physionet-data.eicu_crd.lab',
+            'source': table_prefix + 'lab',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'labresultoffset',
@@ -40,7 +40,7 @@ def eicu():
         },
         {
             # using events because stop offset can be missing
-            'source': 'physionet-data.eicu_crd.medication',
+            'source': table_prefix + 'medication',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'drugstartoffset',
@@ -49,7 +49,7 @@ def eicu():
             'scope': 'Medication'
         },
         {
-            'source': 'physionet-data.eicu_crd.infusiondrug',
+            'source': table_prefix + 'infusiondrug',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'infusionoffset',
@@ -58,7 +58,7 @@ def eicu():
             'scope': 'Infusion'
         },
         {
-            'source': 'physionet-data.eicu_crd.diagnosis',
+            'source': table_prefix + 'diagnosis',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'diagnosisoffset',
@@ -67,7 +67,7 @@ def eicu():
             'scope': 'Diagnosis'
         },
         {
-            'source': 'physionet-data.eicu_crd.microlab',
+            'source': table_prefix + 'microlab',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'culturetakenoffset',
@@ -89,7 +89,7 @@ def eicu():
             'scope': 'GCS'
         },
         {
-            'source': 'physionet-data.eicu_crd.pasthistory',
+            'source': table_prefix + 'pasthistory',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'pasthistoryenteredoffset',
@@ -98,7 +98,7 @@ def eicu():
             'scope': 'History'
         },
         {
-            'source': 'physionet-data.eicu_crd.patient',
+            'source': table_prefix + 'patient',
             'id_field': 'patientunitstayid',
             'attributes': {
                 k: { 'value_field': k.lower().replace(' ', '') }
@@ -114,7 +114,7 @@ def eicu():
             'scope': 'Patient'
         },
         {
-            'source': 'physionet-data.eicu_crd.respiratorycare',
+            'source': table_prefix + 'respiratorycare',
             'type': 'interval',
             'id_field': 'patientunitstayid',
             'start_time_field': 'ventstartoffset',
@@ -124,7 +124,7 @@ def eicu():
             'scope': 'Respiratory'
         },
         {
-            'source': 'physionet-data.eicu_crd.respiratorycharting',
+            'source': table_prefix + 'respiratorycharting',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'respchartentryoffset',
@@ -133,7 +133,7 @@ def eicu():
             'scope': 'Respiratory'
         },
         {
-            'source': 'physionet-data.eicu_crd.treatment',
+            'source': table_prefix + 'treatment',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'treatmentoffset',
@@ -141,7 +141,7 @@ def eicu():
             'scope': 'Treatment'
         },
         {
-            'source': 'physionet-data.eicu_crd.vitalaperiodic',
+            'source': table_prefix + 'vitalaperiodic',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'observationoffset',
@@ -153,7 +153,7 @@ def eicu():
             'scope': 'Vitals'
         },
         {
-            'source': 'physionet-data.eicu_crd.vitalperiodic',
+            'source': table_prefix + 'vitalperiodic',
             'type': 'event',
             'id_field': 'patientunitstayid',
             'time_field': 'observationoffset',
@@ -174,7 +174,7 @@ def eicu():
             'scope': 'Vitals'
         },
         {
-            'source': 'physionet-data.eicu_crd.nursecharting',
+            'source': table_prefix + 'nursecharting',
             'id_field': 'patientunitstayid',
             'time_field': 'nursingchartentryoffset',
             'type': 'event',
@@ -186,10 +186,10 @@ def eicu():
     
     return DatasetFormat(tables, [], [])
 
-def mimiciv():
+def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physionet-data.mimiciv_3_1_icu.'):
     tables = [
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.admissions',
+            'source': hosp_prefix + 'admissions',
             'id_field': 'stay_id',
             'attributes': {
                 'Marital Status': { 'value_field': 'marital_status' },
@@ -198,7 +198,7 @@ def mimiciv():
             }
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.diagnoses_icd',
+            'source': hosp_prefix + 'diagnoses_icd',
             'id_field': 'stay_id',
             'time_field': 'outtime',
             'type': 'event',
@@ -208,7 +208,7 @@ def mimiciv():
             'scope': 'Diagnosis'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.labevents',
+            'source': hosp_prefix + 'labevents',
             'type': 'event',
             'id_field': 'stay_id',
             'time_field': 'charttime',
@@ -217,7 +217,7 @@ def mimiciv():
             'scope': 'Lab'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.microbiologyevents',
+            'source': hosp_prefix + 'microbiologyevents',
             'type': 'event',
             'id_field': 'stay_id',
             'time_field': 'charttime',
@@ -226,7 +226,7 @@ def mimiciv():
             'scope': 'Culture'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.patients',
+            'source': hosp_prefix + 'patients',
             'id_field': 'stay_id',
             'attributes': {
                 'Gender': { 'value_field': 'gender' },
@@ -236,7 +236,7 @@ def mimiciv():
             }
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.prescriptions',
+            'source': hosp_prefix + 'prescriptions',
             'type': 'interval',
             'id_field': 'stay_id',
             'interval_type_field': 'drug',
@@ -246,7 +246,7 @@ def mimiciv():
             'scope': 'Medication'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_icu.chartevents',
+            'source': icu_prefix + 'chartevents',
             'type': 'event',
             'id_field': 'stay_id',
             'time_field': 'charttime',
@@ -255,7 +255,7 @@ def mimiciv():
             'scope': 'chartevents'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_icu.icustays',
+            'source': icu_prefix + 'icustays',
             'id_field': 'stay_id',
             'attributes': {
                 'Admit Time': { 'value_field': 'intime' },
@@ -263,7 +263,7 @@ def mimiciv():
             }
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_icu.inputevents',
+            'source': icu_prefix + 'inputevents',
             'type': 'interval',
             'id_field': 'stay_id',
             'start_time_field': 'starttime',
@@ -273,7 +273,7 @@ def mimiciv():
             'scope': 'inputevents'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_icu.outputevents',
+            'source': icu_prefix + 'outputevents',
             'type': 'event',
             'id_field': 'stay_id',
             'time_field': 'charttime',
@@ -282,7 +282,7 @@ def mimiciv():
             'scope': 'outputevents'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_icu.procedureevents',
+            'source': icu_prefix + 'procedureevents',
             'type': 'interval',
             'id_field': 'stay_id',
             'start_time_field': 'starttime',
@@ -295,20 +295,20 @@ def mimiciv():
 
     joins = {
         **({k: {
-            'dest_table': 'physionet-data.mimiciv_3_1_icu.icustays',
+            'dest_table': icu_prefix + 'icustays',
             'join_key': 'hadm_id'
         } for k in [
-            'physionet-data.mimiciv_3_1_hosp.admissions',
-            'physionet-data.mimiciv_3_1_hosp.labevents',
-            'physionet-data.mimiciv_3_1_hosp.prescriptions',
-            'physionet-data.mimiciv_3_1_hosp.microbiologyevents'
+            hosp_prefix + 'admissions',
+            hosp_prefix + 'labevents',
+            hosp_prefix + 'prescriptions',
+            hosp_prefix + 'microbiologyevents'
         ]}),
-        'physionet-data.mimiciv_3_1_hosp.patients': {
-            'dest_table': 'physionet-data.mimiciv_3_1_icu.icustays',
+        hosp_prefix + 'patients': {
+            'dest_table': icu_prefix + 'icustays',
             'join_key': 'subject_id'
         },
-        'physionet-data.mimiciv_3_1_hosp.diagnoses_icd': {
-            'dest_table': 'physionet-data.mimiciv_3_1_icu.icustays',
+        hosp_prefix + 'diagnoses_icd': {
+            'dest_table': icu_prefix + 'icustays',
             'join_key': 'hadm_id',
             'keep_fields': ['outtime']
         }
@@ -316,13 +316,13 @@ def mimiciv():
 
     vocabularies = [
         {
-            'source': 'physionet-data.mimiciv_3_1_hosp.d_labitems',
+            'source': hosp_prefix + 'd_labitems',
             'concept_id_field': 'itemid',
             'concept_name_field': 'label',
             'scope': 'Lab'
         },
         {
-            'source': 'physionet-data.mimiciv_3_1_icu.d_items',
+            'source': icu_prefix + 'd_items',
             'concept_id_field': 'itemid',
             'concept_name_field': 'label',
             'scope_field': 'linksto',
@@ -332,10 +332,10 @@ def mimiciv():
     
     return DatasetFormat(tables, vocabularies, joins)
 
-def omop():
+def omop(table_prefix=''):
     tables = [
         {
-            'source': 'drug_exposure',
+            'source': table_prefix + 'drug_exposure',
             'type': 'interval',
             'id_field': 'visit_occurrence_id',
             'concept_id_field': 'drug_source_concept_id',
@@ -345,7 +345,7 @@ def omop():
             'scope': 'Drug'
         },
         {
-            'source': 'condition_occurrence',
+            'source': table_prefix + 'condition_occurrence',
             'type': 'interval',
             'id_field': 'visit_occurrence_id',
             'concept_id_field': 'condition_source_concept_id',
@@ -354,7 +354,7 @@ def omop():
             'scope': 'Condition'
         },
         {
-            'source': 'procedure_occurrence',
+            'source': table_prefix + 'procedure_occurrence',
             'type': 'event',
             'id_field': 'visit_occurrence_id',
             'concept_id_field': 'procedure_source_concept_id',
@@ -362,7 +362,7 @@ def omop():
             'scope': 'Procedure'
         },
         {
-            'source': 'observation',
+            'source': table_prefix + 'observation',
             'type': 'event',
             'id_field': 'visit_occurrence_id',
             'concept_id_field': 'observation_source_concept_id',
@@ -371,7 +371,7 @@ def omop():
             'scope': 'Observation'
         },
         {
-            'source': 'measurement',
+            'source': table_prefix + 'measurement',
             'type': 'event',
             'id_field': 'visit_occurrence_id',
             'concept_id_field': 'measurement_source_concept_id',
@@ -380,7 +380,7 @@ def omop():
             'scope': 'Measurement'
         },
         {
-            'source': 'device_exposure',
+            'source': table_prefix + 'device_exposure',
             'type': 'interval',
             'id_field': 'visit_occurrence_id',
             'concept_id_field': 'device_source_concept_id',
@@ -389,7 +389,7 @@ def omop():
             'scope': 'Device'
         },
         {
-            'source': 'visit_occurrence',
+            'source': table_prefix + 'visit_occurrence',
             'type': 'interval',
             'id_field': 'visit_occurrence_id',
             'start_time_field': 'visit_start_datetime',
@@ -406,7 +406,7 @@ def omop():
             }
         },
         {
-            'source': 'person',
+            'source': table_prefix + 'person',
             'id_field': 'visit_occurrence_id',
             'attributes': {
                 'Gender': {
@@ -436,7 +436,7 @@ def omop():
     # and scope field and contain the concept mappings for one or more scopes
     vocabularies = [
         {
-            'source': 'concept',
+            'source': table_prefix + 'concept',
             'concept_id_field': 'concept_id',
             'concept_name_field': 'concept_name',
             'scope_field': 'domain_id',

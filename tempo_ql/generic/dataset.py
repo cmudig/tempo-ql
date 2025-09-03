@@ -747,6 +747,41 @@ class GenericDataset:
             result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
             return Attributes(result_df.set_index('id')['maxtime'])
         
+    def get_data_for_scope(self, scope, value_field=None):
+        """
+        Returns all data for a given scope as an Events or Intervals.
+        """
+        with self.engine.connect() as conn:
+            tables = []
+            return_type = None
+            for table_info in self.tables:
+                if table_info.get('scope') != scope: continue
+                if 'type' not in table_info:
+                    raise ValueError(f"A table in scope '{scope}' does not have an associated type. It must be set to 'event' or 'interval' to allow querying all data within a scope.")
+                if return_type is None: return_type = table_info['type']
+                if return_type != table_info['type']:
+                    raise ValueError(f"Data elements with scope '{scope}' must have same type, got {return_type} and {table_info['type']}")                    
+                tables.append(self._base_query_for_table(table_info, value_field=value_field))
+                    
+            result = self._execute_query(conn, union(*tables))
+            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            
+        if return_type == 'event':
+            result = Events(result_df,
+                        id_field='id',
+                        type_field='eventtype',
+                        time_field='time',
+                        value_field='value')
+        elif return_type == 'interval':
+            result = Intervals(result_df, 
+                            id_field='id',
+                            type_field='intervaltype',
+                            start_time_field='starttime',
+                            end_time_field='endtime',
+                            value_field='value')
+        else:
+            assert False, f'Unknown return type {return_type}'
+        
     def get_data_element(
         self,
         scope=None,
@@ -823,34 +858,7 @@ class GenericDataset:
             if scope is None:
                 raise ValueError("Scope must be provided if neither id nor name query are given")
             
-            with self.engine.connect() as conn:
-                tables = []
-                return_type = None
-                for table_info in self.tables:
-                    if table_info.get('scope') != scope: continue
-                    if return_type is None: return_type = table_info['type']
-                    if return_type != table_info['type']:
-                        raise ValueError(f"Data elements with scope '{scope}' must have same type, got {return_type} and {table_info['type']}")                    
-                    tables.append(self._base_query_for_table(table_info, value_field=value_field))
-                        
-                result = self._execute_query(conn, union(*tables))
-                result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
-                
-            if return_type == 'event':
-                result = Events(result_df,
-                            id_field='id',
-                            type_field='eventtype',
-                            time_field='time',
-                            value_field='value')
-            elif return_type == 'interval':
-                result = Intervals(result_df, 
-                                id_field='id',
-                                type_field='intervaltype',
-                                start_time_field='starttime',
-                                end_time_field='endtime',
-                                value_field='value')
-            else:
-                assert False, f'Unknown return type {return_type}'
+            result = self.get_data_for_scope(scope, value_field=value_field)
             return (result, self._captured_queries) if return_queries else result
             
         matching_concepts = self.search_concept_id(concept_id_query=concept_id_query,

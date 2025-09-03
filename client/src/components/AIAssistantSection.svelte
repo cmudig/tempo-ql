@@ -101,7 +101,7 @@
       on:click={() => (tab = 'query')}
       type="button"
     >
-      Query
+      Question
     </button>
     <button
       class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 disabled:opacity-50 {tab ===
@@ -112,7 +112,7 @@
       disabled={!llmResponse && !error}
       type="button"
     >
-      Response
+      Answer
     </button>
     <div class="flex-auto" />
     <div
