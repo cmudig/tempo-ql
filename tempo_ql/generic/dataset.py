@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine, MetaData, Table, Column, select, or_, case, union, func, distinct, literal, insert, cast, String, null, text
-from sqlalchemy.types import Interval, Integer, DateTime
+from sqlalchemy.types import Interval, Integer, DateTime, Date
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import NoSuchTableError
 import pandas as pd
@@ -647,7 +647,7 @@ class GenericDataset:
             
         stmt = select(
             *table_fields
-        ).select_from(self._limit_trajectory_ids(
+        ).distinct().select_from(self._limit_trajectory_ids(
             table, 
             table_info['id_field']
         ))
@@ -723,24 +723,53 @@ class GenericDataset:
         Returns an Attributes where the value for each ID is the earliest timestamp
         for that trajectory ID in the dataset.
         """
+        primary_time_table = next((t for t in self.tables if t.get('primary_time_table')), None)
         with self.engine.connect() as conn:
-            all_times = union(
-                *(select(
-                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info).c[scope_info['start_time_field']]).label('mintime')
-                ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info), 
-                    scope_info['id_field']
-                )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
-                *(select(
-                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('mintime')
-                ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info), 
-                    scope_info['id_field']
-                )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
-            ).cte('all_times')
-            stmt = select(all_times.c.id, func.min(all_times.c.mintime).label('mintime')).group_by(all_times.c.id)
+            if primary_time_table is not None and "source" in primary_time_table and "id_field" in primary_time_table:
+                if self.verbose:
+                    print(f"Querying primary ID table ({primary_time_table['source']}) to get min times")
+                time_table = self._get_table(primary_time_table)
+                combined_times = []
+                if "start_time_field" in primary_time_table:
+                    combined_times.append(select(
+                        self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
+                        self.time_field_transform(time_table.c[primary_time_table['start_time_field']]).label('time')
+                    ))
+                if "end_time_field" in primary_time_table:
+                    combined_times.append(select(
+                        self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
+                        self.time_field_transform(time_table.c[primary_time_table['end_time_field']]).label('time')
+                    ))
+                if "time_field" in primary_time_table:
+                    combined_times.append(select(
+                        self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
+                        self.time_field_transform(time_table.c[primary_time_table['time_field']]).label('time')
+                    ))
+                all_times = union(*combined_times).cte('all_times')
+            else:
+                if self.verbose:
+                    print(f"Querying ALL tables with times to get min times")
+                all_times = union(
+                    *(select(
+                        self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                        self.time_field_transform(self._get_table(scope_info).c[scope_info['start_time_field']]).label('time')
+                    ).select_from(self._limit_trajectory_ids(
+                        self._get_table(scope_info), 
+                        scope_info['id_field']
+                    )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
+                    *(select(
+                        self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                        self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('time')
+                    ).select_from(self._limit_trajectory_ids(
+                        self._get_table(scope_info), 
+                        scope_info['id_field']
+                    )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
+                ).cte('all_times')
+            if issubclass(type(all_times.c.time.type), Date):
+                time_col = cast(all_times.c.time, DateTime)
+            else:
+                time_col = all_times.c.time
+            stmt = select(all_times.c.id, func.min(time_col).label('mintime')).group_by(all_times.c.id)
             result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             return Attributes(result_df.set_index('id')['mintime'])
@@ -750,29 +779,58 @@ class GenericDataset:
         Returns an Attributes where the value for each ID is the latest timestamp
         for that trajectory ID in the dataset.
         """
+        primary_time_table = next((t for t in self.tables if t.get('primary_time_table')), None)
         with self.engine.connect() as conn:
-            all_times = union(
-                *(select(
-                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info).c[scope_info['end_time_field']]).label('maxtime')
-                ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info), 
-                    scope_info['id_field']
-                )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
-                *(select(
-                    self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                    self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('maxtime')
-                ).select_from(self._limit_trajectory_ids(
-                    self._get_table(scope_info), 
-                    scope_info['id_field']
-                )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
-            ).cte('all_times')
+            if primary_time_table is not None and "source" in primary_time_table and "id_field" in primary_time_table:
+                if self.verbose:
+                    print(f"Querying primary ID table ({primary_time_table['source']}) to get min times")
+                time_table = self._get_table(primary_time_table)
+                combined_times = []
+                if "start_time_field" in primary_time_table:
+                    combined_times.append(select(
+                        self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
+                        self.time_field_transform(time_table.c[primary_time_table['start_time_field']]).label('time')
+                    ))
+                if "end_time_field" in primary_time_table:
+                    combined_times.append(select(
+                        self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
+                        self.time_field_transform(time_table.c[primary_time_table['end_time_field']]).label('time')
+                    ))
+                if "time_field" in primary_time_table:
+                    combined_times.append(select(
+                        self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
+                        self.time_field_transform(time_table.c[primary_time_table['time_field']]).label('time')
+                    ))
+                all_times = union(*combined_times).cte('all_times')
+            else:
+                if self.verbose:
+                    print(f"Querying ALL tables with times to get min times")
+                all_times = union(
+                    *(select(
+                        self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                        self.time_field_transform(self._get_table(scope_info).c[scope_info['end_time_field']]).label('time')
+                    ).select_from(self._limit_trajectory_ids(
+                        self._get_table(scope_info), 
+                        scope_info['id_field']
+                    )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
+                    *(select(
+                        self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
+                        self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('time')
+                    ).select_from(self._limit_trajectory_ids(
+                        self._get_table(scope_info), 
+                        scope_info['id_field']
+                    )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
+                ).cte('all_times')
+            if issubclass(type(all_times.c.time.type), Date):
+                time_col = cast(all_times.c.time, DateTime)
+            else:
+                time_col = all_times.c.time
             try:
-                increment = cast(datetime.timedelta(seconds=1), Interval) if issubclass(type(all_times.c.maxtime.type), DateTime) else 1
-                stmt = select(all_times.c.id, (func.max(all_times.c.maxtime) + increment).label('maxtime')).group_by(all_times.c.id)
+                increment = cast(datetime.timedelta(seconds=1), Interval) if issubclass(type(time_col.type), DateTime) else 1
+                stmt = select(all_times.c.id, (func.max(time_col) + increment).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
             except Exception as e:
-                stmt = select(all_times.c.id, func.datetime_add(func.max(all_times.c.maxtime), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
+                stmt = select(all_times.c.id, func.datetime_add(func.max(time_col), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             return Attributes(result_df.set_index('id')['maxtime'])

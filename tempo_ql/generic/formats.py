@@ -339,14 +339,14 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
     
     return DatasetFormat(tables, vocabularies, joins)
 
-def omop(table_prefix='', id_field='visit_occurrence_id'):
+def omop(table_prefix='', id_field='visit_occurrence_id', use_source_concept_ids=False, concept_id_field=None):
     assert id_field in ('visit_occurrence_id', 'person_id'), f"Don't know how to set up OMOP dataset specification for ID field '{id_field}'"
     tables = [
         {
             'source': table_prefix + 'drug_exposure',
             'type': 'interval',
             'id_field': id_field,
-            'concept_id_field': 'drug_source_concept_id',
+            'concept_id_field': 'drug_source_concept_id' if use_source_concept_ids else 'drug_concept_id',
             'start_time_field': 'drug_exposure_start_datetime',
             'end_time_field': 'drug_exposure_end_datetime',
             'default_value_field': 'quantity',
@@ -356,7 +356,7 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
             'source': table_prefix + 'condition_occurrence',
             'type': 'interval',
             'id_field': id_field,
-            'concept_id_field': 'condition_source_concept_id',
+            'concept_id_field': 'condition_source_concept_id' if use_source_concept_ids else 'condition_concept_id',
             'start_time_field': 'condition_start_datetime',
             'end_time_field': 'condition_end_datetime',
             'scope': 'Condition'
@@ -365,7 +365,7 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
             'source': table_prefix + 'procedure_occurrence',
             'type': 'event',
             'id_field': id_field,
-            'concept_id_field': 'procedure_source_concept_id',
+            'concept_id_field': 'procedure_source_concept_id' if use_source_concept_ids else 'procedure_concept_id',
             'time_field': 'procedure_datetime',
             'scope': 'Procedure'
         },
@@ -373,7 +373,7 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
             'source': table_prefix + 'observation',
             'type': 'event',
             'id_field': id_field,
-            'concept_id_field': 'observation_source_concept_id',
+            'concept_id_field': 'observation_source_concept_id' if use_source_concept_ids else 'observation_concept_id',
             'time_field': 'observation_datetime',
             'default_value_field': 'value_as_string',
             'scope': 'Observation'
@@ -382,7 +382,7 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
             'source': table_prefix + 'measurement',
             'type': 'event',
             'id_field': id_field,
-            'concept_id_field': 'measurement_source_concept_id',
+            'concept_id_field': 'measurement_source_concept_id' if use_source_concept_ids else 'measurement_concept_id',
             'time_field': 'measurement_datetime',
             'default_value_field': 'value_as_number',
             'scope': 'Measurement'
@@ -391,7 +391,7 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
             'source': table_prefix + 'device_exposure',
             'type': 'interval',
             'id_field': id_field,
-            'concept_id_field': 'device_source_concept_id',
+            'concept_id_field': 'device_source_concept_id' if use_source_concept_ids else 'device_concept_id',
             'start_time_field': 'device_exposure_start_datetime',
             'end_time_field': 'device_exposure_end_datetime',
             'scope': 'Device'
@@ -440,6 +440,16 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
                     'scope': 'Ethnicity'
                 }
             }
+        },
+        {
+            'source': table_prefix + 'observation_period',
+            'id_field': id_field,
+            'type': 'interval',
+            'primary_time_table': True,
+            'start_time_field': 'observation_period_start_date',
+            'end_time_field': 'observation_period_end_date',
+            'interval_type': 'Observation Period',
+            'scope': 'Observation Period'
         }
     ]
 
@@ -448,7 +458,7 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
     vocabularies = [
         {
             'source': table_prefix + 'concept',
-            'concept_id_field': 'concept_id',
+            'concept_id_field': concept_id_field or ('concept_code' if use_source_concept_ids else 'concept_id'),
             'concept_name_field': 'concept_name',
             'scope_field': 'domain_id',
             'scopes': ['Drug', 'Condition', 'Procedure', 'Observation', 'Measurement', 'Device']
@@ -458,6 +468,10 @@ def omop(table_prefix='', id_field='visit_occurrence_id'):
     if id_field == 'visit_occurrence_id':
         joins = {
             table_prefix + 'person': {
+                'dest_table': table_prefix + 'visit_occurrence',
+                'join_key': 'person_id'
+            },
+            table_prefix + 'observation_period': {
                 'dest_table': table_prefix + 'visit_occurrence',
                 'join_key': 'person_id'
             }
