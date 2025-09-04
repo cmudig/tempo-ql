@@ -1,4 +1,4 @@
-# Tempo-QL: Standardized Temporal Queries for ML in Healthcare
+# TempoQL: Standardized Temporal Queries for ML in Healthcare
 
 ## Installation
 

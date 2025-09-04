@@ -16,6 +16,7 @@
   import TextInputCard from './TextInputCard.svelte';
   import {
     faCheck,
+    faClock,
     faCopy,
     faListDots,
     faPencil,
@@ -140,6 +141,12 @@
     currentQueryPath = newPath;
   }
 
+  function onDiscard() {
+    if (currentQueryPath.length > 0) {
+      textInput = getQueryItem(fileContents, currentQueryPath) as string;
+    }
+  }
+
   function duplicateQuery() {
     let result = duplicateQueryItem(fileContents, currentQueryPath);
     fileContents = result.contents;
@@ -157,10 +164,7 @@
     }
   }
 
-  function runAndSaveQuery() {
-    if (currentQueryPath.length > 0) {
-      fileContents = updateQueryItem(fileContents, currentQueryPath, textInput);
-    }
+  function runQuery() {
     onRun();
   }
 
@@ -310,11 +314,19 @@
         </button>
       {:else}
         <h3
-          class="text-lg font-semibold text-gray-900 dark:text-gray-100 pr-2 whitespace-nowrap truncate"
+          class="text-lg font-semibold text-gray-900 dark:text-gray-100 pr-2 whitespace-nowrap flex-auto truncate"
         >
           TempoQL Query
         </h3>
       {/if}
+      <button
+        on:click={onQueryHistoryClick}
+        class="px-3 py-1.5 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white whitespace-nowrap"
+        title="View query history"
+      >
+        <Fa icon={faClock} class="inline mr-2" />
+        History
+      </button>
     </div>
 
     <!-- Text Input Card -->
@@ -322,12 +334,24 @@
       <TextInputCard
         bind:value={textInput}
         {dataFields}
-        onRun={runAndSaveQuery}
+        onRun={runQuery}
         {onExplain}
         onHistoryClick={onQueryHistoryClick}
         width="w-full"
         allowSave={!!savePath}
         {onSaveAs}
+        {onDiscard}
+        onSave={() => {
+          if (currentQueryPath.length > 0)
+            fileContents = placeQueryItem(
+              fileContents,
+              currentQueryPath,
+              textInput
+            );
+        }}
+        hasUnsavedChanges={currentQueryPath.length > 0 &&
+          !!fileContents &&
+          textInput != getQueryItem(fileContents, currentQueryPath)}
       />
     </div>
 

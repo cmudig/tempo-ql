@@ -260,6 +260,10 @@ class DatabaseVariableStore:
             self.metadata.drop_all(bind=self.engine, tables=[var_table])
             self.metadata.remove(var_table)
             
+    def update(self, other):
+        for k, v in other.items():
+            self[k] = v
+    
 class FileVariableStore:
     """
     Class that handles storing and retrieving variables from a local directory.
@@ -447,3 +451,7 @@ class FileVariableStore:
             del self.var_metadata[variable_name]
             var_path = self._get_variable_path(variable_name)
             if os.path.exists(var_path): os.remove(var_path)
+            
+    def update(self, other):
+        for k, v in other.items():
+            self[k] = v

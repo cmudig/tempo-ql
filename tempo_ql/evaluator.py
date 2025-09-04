@@ -10,7 +10,6 @@ import os
 import uuid
 import logging
 import random
-import tqdm
 
 GRAMMAR = """
 start: variable_expr | variable_list
@@ -19,10 +18,14 @@ time_index: EVERY atom [time_bounds]            -> periodic_time_index // period
     | ATEVERY atom [time_bounds]  -> event_time_index
     | AT OPENPAREN expr (COMMA expr)* CLOSEPAREN             -> array_time_index
 
-time_bounds: FROM expr TO expr              -> time_bounds_both_ends
-    | BEFORE expr                              -> time_bounds_upper
-    | AFTER expr                               -> time_bounds_lower
-    | AT expr                               -> time_bounds_instant
+time_bounds: time_bounds_both_ends
+    | time_bounds_upper
+    | time_bounds_lower
+    | time_bounds_instant
+time_bounds_both_ends: FROM expr TO expr
+time_bounds_upper: BEFORE expr
+time_bounds_lower: AFTER expr
+time_bounds_instant: AT expr
 
 variable_list: variable_expr
     | OPENPAREN variable_expr (COMMA variable_expr)* CLOSEPAREN
@@ -313,6 +316,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
         return Duration(self._parse_literal(tree.children[0]), tree.children[1])
         
     def time_bounds(self, tree):
+        return self.visit(tree.children[0])
+    
+    def time_bounds_both_ends(self, tree):
         start, end = self.visit(tree.children[1]), self.visit(tree.children[3])
         if isinstance(start, Compilable):
             start = start.execute()
@@ -353,6 +359,11 @@ class EvaluateQuery(lark.visitors.Interpreter):
                     start = self.time_index.with_times(make_aligned_value_series(self.time_index, start))
                     end = self.time_index.with_times(make_aligned_value_series(self.time_index, end))
                 else:
+                    # Add nans for missing values so that the attributes align
+                    if len(end) < len(start):
+                        end = Attributes(make_aligned_value_series(start, end))
+                    elif len(start) < len(end):
+                        start = Attributes(make_aligned_value_series(end, start))
                     start = TimeIndex.from_attributes(start)
                     end = TimeIndex.from_attributes(end)
             elif isinstance(start, TimeSeries) and isinstance(end, TimeSeries) and self.time_index is None:
@@ -380,18 +391,15 @@ class EvaluateQuery(lark.visitors.Interpreter):
             
         return (start, end, new_index)
     
-    def time_bounds_both_ends(self, tree):
-        return self.time_bounds(tree)
-    
     def time_bounds_upper(self, tree):
-        start, end, new_index = self.time_bounds(lark.Tree('', [lark.Token('', ''), 
+        start, end, new_index = self.time_bounds_both_ends(lark.Tree('time_bounds_both_ends', [lark.Token('', ''), 
                                                                 self.min_time(lark.Tree('', [])),
                                                                 lark.Token('', ''),
                                                                 self.visit(tree.children[1])]))
         return start, self._perform_binary_numpy_function([start, end], "max", np.maximum), new_index
     
     def time_bounds_lower(self, tree):
-        start, end, new_index = self.time_bounds(lark.Tree('', [lark.Token('', ''),
+        start, end, new_index = self.time_bounds_both_ends(lark.Tree('', [lark.Token('', ''),
                                                                 self.visit(tree.children[1]), 
                                                                 lark.Token('', ''),
                                                                 self.max_time(lark.Tree('', []))]))
@@ -399,7 +407,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
 
     def time_bounds_instant(self, tree):
         times = self.visit(tree.children[0])
-        return self.time_bounds(lark.Tree('', [lark.Token('', ''), times, lark.Token('', ''), times]))
+        return self.time_bounds_both_ends(lark.Tree('', [lark.Token('', ''), times, lark.Token('', ''), times]))
     
     def _parse_literal(self, literal):
         if literal.startswith('/'):
@@ -488,13 +496,19 @@ class EvaluateQuery(lark.visitors.Interpreter):
     
     def negate(self, tree): return ~self.visit(tree.children[0])
     
-    def logical_and(self, tree): return self.visit(tree.children[0]) & self.visit(tree.children[1])
-    def logical_or(self, tree): return self.visit(tree.children[0]) | self.visit(tree.children[1])
+    def logical_and(self, tree): return (
+        self._log_subquery(tree.children[0], self.visit(tree.children[0])) & 
+        self._log_subquery(tree.children[1], self.visit(tree.children[1]))
+    )
+    def logical_or(self, tree): return (
+        self._log_subquery(tree.children[0], self.visit(tree.children[0])) |
+        self._log_subquery(tree.children[1], self.visit(tree.children[1]))
+    )
 
     def agg_expr(self, tree):
         agg_method = self.visit(tree.children[0])
         expr = self._log_subquery(tree.children[1], self.visit(tree.children[1]))
-        *time_bounds, time_index = self.visit(tree.children[-1]) if tree.children[-1] is not None else self.time_bounds(lark.Tree('time_bounds', [
+        *time_bounds, time_index = self.visit(tree.children[-1]) if tree.children[-1] is not None else self.time_bounds_both_ends(lark.Tree('time_bounds_both_ends', [
             lark.Token('FROM', ''), 
             lark.Tree('min_time', []),
             lark.Token('TO', ''), 
@@ -522,7 +536,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         else:
             if isinstance(expr, (Events, TimeSeries)):
                 return self._log_subquery(tree, expr.aggregate(*time_bounds, agg_method[0]))
-            elif isinstance(expr, Intervals):
+            elif isinstance(expr, (Intervals, Compilable)):
                 result = expr.aggregate(*time_bounds, agg_method[1], agg_method[0])
                 return self._log_subquery(tree, result)
             else:
@@ -663,19 +677,19 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 if isinstance(operands[0], Compilable):
                     return operands[0].time()
                 if not hasattr(operands[0], "get_times"):
-                    raise ValueError("time function requires an object with time values")
+                    raise ValueError(f"time function requires an object with time values, got {type(operands[0]).__name__}")
                 return operands[0].with_values(operands[0].get_times())
             elif function_name == "starttime":
                 if isinstance(operands[0], Compilable):
                     return operands[0].start().time()
                 if not hasattr(operands[0], "get_start_times"):
-                    raise ValueError("starttime function requires interval objects")
+                    raise ValueError(f"starttime function requires interval objects, got {type(operands[0]).__name__}")
                 return operands[0].start_events().with_values(operands[0].get_start_times())
             elif function_name == "endtime":
                 if isinstance(operands[0], Compilable):
                     return operands[0].end().time()
                 if not hasattr(operands[0], "get_end_times"):
-                    raise ValueError("endtime function requires interval objects")
+                    raise ValueError(f"endtime function requires interval objects, got {type(operands[0]).__name__}")
                 return operands[0].end_events().with_values(operands[0].get_end_times())
         elif function_name == "type":
             if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
@@ -690,13 +704,13 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 if isinstance(operands[0], Compilable):
                     return operands[0].start()
                 if not hasattr(operands[0], "get_start_times"):
-                    raise ValueError("start function requires interval objects")
+                    raise ValueError(f"start function requires interval objects, got {type(operands[0]).__name__}")
                 return operands[0].start_events()
             elif function_name == "end":
                 if isinstance(operands[0], Compilable):
                     return operands[0].end()
                 if not hasattr(operands[0], "get_end_times"):
-                    raise ValueError("end function requires interval objects")
+                    raise ValueError(f"end function requires interval objects, got {type(operands[0]).__name__}")
                 return operands[0].end_events()
         elif function_name in ("abs", ):
             if len(operands) != 1: raise ValueError(f"{function_name} function requires exactly one argument")
@@ -735,7 +749,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
                         if isinstance(operand, Attributes) else operand
                         for operand in operands]
             if not isinstance(operands[0], Events) or not isinstance(operands[1], Events):
-                raise ValueError(f"Both arguments to {function_name} function must be Events")
+                raise ValueError(f"Both arguments to {function_name} function must be Events, got {type(operands[0]).__name__} and {type(operands[1]).__name__}")
             return Intervals.from_events(*operands)
         elif function_name == "assign":
             if len(operands) != 2: raise ValueError(f"{function_name} function requires exactly two arguments")
@@ -831,7 +845,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             events = Events.from_attributes(events)
         if not isinstance(events, Events):
             raise ValueError(f"Expected 'at every' data element to evaluate to an Events object, but instead got '{type(events).__name__}'")
-        index, filtered_events = TimeIndex.from_events(events, starts=start_time, ends=end_time, return_filtered_events=True)
+        index, filtered_events = TimeIndex.from_event_times(events, starts=start_time, ends=end_time, return_filtered_events=True)
         self.index_value_placeholder = TimeSeries(index, filtered_events.get_values())
         return self._log_subquery(tree, index)
         
@@ -917,7 +931,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             elif (isinstance(var_exp, Events) and len(var_exp) == len(self.time_index) and 
                     (var_exp.get_ids().values == self.time_index.get_ids().values).all()):
                 # This is an Events but is perfectly aligned to the time index
-                var_exp = TimeSeries(TimeIndex.from_events(var_exp), var_exp.get_values())
+                var_exp = TimeSeries(TimeIndex.from_event_times(var_exp), var_exp.get_values())
             elif isinstance(var_exp, (int, float, str, np.generic)):
                 # constant value at timesteps
                 val = var_exp.item() if isinstance(var_exp, np.generic) else var_exp
@@ -932,7 +946,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         else:
             children = tree.children[0].children[1:-1:2]
         if self.update_fn is None:
-            pbar = tqdm.tqdm(children) if self.verbose else children
+            pbar = children
         else:
             def progress_iterable():
                 for i, c in enumerate(children):
@@ -961,11 +975,30 @@ class EvaluateQuery(lark.visitors.Interpreter):
             # to Compilables! This will enable us to calculate dynamic values
             # during the aggregation.
             
-            for desc in node.children[1].iter_subtrees():
-                if desc is None or desc == node: continue
-                desc.children = [Compilable(self.visit(n)) 
-                                 if (isinstance(n, lark.Tree) and n.data in ("agg_expr", "now")) else n 
-                                 for n in desc.children]
+            def _iter_non_time_series_subtrees(root_node):
+                if root_node is None or root_node == node: return
+                if root_node.data == "time_series": return
+                                    
+                for child in root_node.children:
+                    if isinstance(child, lark.Tree):
+                        yield from _iter_non_time_series_subtrees(child)
+                yield root_node
+                
+            for desc in _iter_non_time_series_subtrees(node.children[1]):
+                new_children = []
+                for child in desc.children:
+                    # we could also have an aggregation expression with an implicit time index
+                    if (isinstance(child, lark.Tree) and 
+                        child.data == "agg_expr" and 
+                        (time_bounds := next((n for n in child.iter_subtrees_topdown() if isinstance(n, lark.Tree) and n.data == 'time_bounds'), None))):
+                        # try parsing the time bounds; if they exist then ignore this agg expression
+                        _, _, time_index = self.time_bounds(time_bounds)
+                        if time_index is not None:
+                            new_children.append(child)
+                            continue
+                    new_children.append(Compilable(self.visit(child)) 
+                                 if (isinstance(child, lark.Tree) and child.data in ("agg_expr", "now")) else child)
+                desc.children = new_children
                 
         
     def where_clause(self, tree):
@@ -979,7 +1012,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         elif isinstance(base, (Events, Intervals, EventSet, IntervalSet, Compilable)):
             return base.filter(where)
         else:
-            return base.where(where, pd.NA)
+            return base.where(where.astype(pd.BooleanDtype()), pd.NA)
         
     def with_clause(self, tree):
         var_name = tree.children[2].value
@@ -1075,9 +1108,9 @@ class QueryEngine:
     
     def _get_variable_references(self, query):
         tree = self.parse(query)
-        return list(str(x) for x in tree.scan_values(lambda n: isinstance(n, lark.Tree) and n.data == 'var_name'))
+        return set(list(str(x.children[0]) for x in tree.find_data('var_name')))
     
-    def get_compute_order(self, queries):
+    def get_compute_order(self, queries, target=None):
         """
         Given a dictionary of variable name tuple -> query string, returns an ordering of variables
         such that dependencies are computed before dependents.
@@ -1086,15 +1119,22 @@ class QueryEngine:
         """
         # Build dependency graph
         deps = {}
+        target_path = None
         for var, query in queries.items():
             try:
-                refs = set(self._get_variable_references(query))
+                refs = self._get_variable_references(query)
             except Exception as e:
-                raise ValueError(f"Failed to parse query '{var[-1]}': {e}")
+                print(f"Warning: Failed to parse query '{var[-1]}': {e}")
+                deps[var] = set()
+                if var[-1] == target: raise e
+                continue
             if var[-1] in refs:
                 raise ValueError(f"Variable '{var[-1]}' refers to itself in its own computation.")
             # Only keep references that are also variables in the dictionary
             deps[var] = {r for r in queries if r[-1] in refs}
+            if var[-1] == target: target_path = var
+        if target is not None and target_path is None:
+            raise KeyError(f"Couldn't find target variable {target}")
 
         # States: 0 = unvisited, 1 = visiting, 2 = visited
         state = {var: 0 for var in queries}
@@ -1111,13 +1151,13 @@ class QueryEngine:
             state[v] = 2
             order.append(v)
 
-        for var in queries:
+        for var in ([target_path] if target_path is not None else queries):
             if state[var] == 0:
                 dfs(var)
 
         return order
 
-    def query_from(self, query_source, flatten=True, variable_store=None, **kwargs):
+    def query_from(self, query_source, flatten=True, variable_store=None, target=None, show_progress=False, query_transform=None, **kwargs):
         """
         Computes query results from the given object, which can be a single query
         string, a (possibly nested) dictionary of names mapping to query strings
@@ -1130,6 +1170,11 @@ class QueryEngine:
             intermediate variable results. This could be part of the variable_stores
             passed to the QueryEngine constructor; if it is not, then it will
             take precedence in any variable lookups during the query execution.
+        target: If provided, ONLY return the result for the given query. Only
+            queries that need to be evaluated to resolve variable references in
+            the target query will be run.
+        query_transform: If provided, a function that will take a variable name
+            and query string, and produce a new query string.
         kwargs: Arguments to pass to .query().
         """
         if isinstance(query_source, (str, Path)):
@@ -1154,18 +1199,29 @@ class QueryEngine:
             return self.query(queries, save_store=variable_store, **kwargs)
         
         flat_queries = flatten_dict(queries)
-        ordering = self.get_compute_order(flat_queries)
+        if query_transform is not None:
+            flat_queries = {k: query_transform(k[-1], v) for k, v in flat_queries.items()}
+        ordering = self.get_compute_order(flat_queries, target=target)
 
         result = {}       
         cache_store = variable_store if variable_store is not None else {} 
-        for var in ordering:
-            if var[-1] not in cache_store:
-                try:
-                    cache_store[var[-1]] = self.query(flat_queries[var], variable_store=cache_store, **kwargs)
-                except Exception as e:
-                    raise ValueError(f"Failed to execute query '{var[-1]}': {e}")
-            result[var] = cache_store[var[-1]]
+        if show_progress:
+            import tqdm
+            pbar = tqdm.tqdm(ordering)
+        else:
+            pbar = ordering
+        for var in pbar:
+            if show_progress:
+                pbar.set_description(var[-1])
+            try:
+                query_result = self.query(flat_queries[var], variable_store=cache_store, **kwargs)
+                cache_store[var[-1]] = query_result[0] if kwargs.get("return_subqueries", False) else query_result
+            except Exception as e:
+                raise ValueError(f"Failed to execute query '{var[-1]}': {e}")
+            result[var] = query_result
         
+        if target is not None:
+            return next(r for k, r in result.items() if k[-1] == target)
         if flatten:
             return {k[-1]: v for k, v in result.items()}
         return unflatten_dict(result)

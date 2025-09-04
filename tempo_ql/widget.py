@@ -247,10 +247,13 @@ class TempoQLWidget(anywidget.AnyWidget):
         
         # Execute query
         self._set_loading(True, "Running query...")
-        result, subqueries = self.query_engine.query(query, variable_store=self.variable_store, return_subqueries=True)
-        if var_name is not None and self.variable_store is not None:
-            self.variable_store[var_name] = result
-        
+        if var_name is not None:
+            result, subqueries = self.query_engine.query_from(self.file_contents, target=var_name, variable_store=self.variable_store, return_subqueries=True)
+            if self.variable_store is not None:
+                self.variable_store[var_name] = result
+        else:
+            result, subqueries = self.query_engine.query(query, variable_store=self.variable_store, return_subqueries=True)
+            
         # Process successful query
         self._set_loading(True, "Processing results...")
         self.data = result

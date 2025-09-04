@@ -13,6 +13,8 @@ def make_aligned_value_series(value_set, other):
         broadcast_attrs = pd.merge(pd.DataFrame({"id": value_set.get_ids()}), other.series,
                                     left_on="id", right_index=True,
                                     how='left')
+        if isinstance(value_set, Attributes):
+            broadcast_attrs = broadcast_attrs.set_index("id")
         return broadcast_attrs[other.name]
     elif hasattr(other, "get_values"):
         if len(other.get_values()) != len(value_set.get_values()):
@@ -93,6 +95,14 @@ def union_data(lhs, rhs):
             cast_dtype = float
         except:
             cast_dtype = str
+    
+    if isinstance(lhs, TimeSeries): lhs = lhs.to_events()
+    if isinstance(rhs, TimeSeries): rhs = rhs.to_events()
+    
+    if isinstance(lhs, Compilable):
+        return lhs.union(rhs)
+    elif isinstance(rhs, Compilable):
+        return rhs.union(lhs)
     
     if isinstance(lhs, Events):
         if not isinstance(rhs, Events): raise ValueError(f"All arguments to union must be of the same type")
@@ -358,6 +368,14 @@ class Compilable:
         
         return TimeSeries(index, pd.Series(grouped_values, name=result_name or "aggregated_series").convert_dtypes())
         
+    def aggregate(self, start_times, end_times, agg_type, agg_func):
+        """
+        Performs an aggregation that returns a single value per ID. Returns an
+        Attributes object.
+        """
+        result = self.bin_aggregate(start_times, start_times, end_times, agg_type, agg_func)
+        return Attributes(result.series.set_axis(result.index.get_ids()))
+        
     def where(self, condition, other=None):
         if not hasattr(other, "get_values"):
             if other is None: other = "pd.NA"
@@ -388,6 +406,16 @@ class Compilable:
             if immediate else f"({self.function_string(immediate)})[{condition.function_string(immediate)}]"),
                           leaves={**self.leaves, **condition.leaves},
                           time_expression=lambda immediate: f"({self.time_expression(immediate)})[{condition.function_string(immediate)}]")
+    
+    def union(self, other):
+        if not isinstance(other, Compilable):
+            other = Compilable.wrap(other)
+            
+        return Compilable(lambda immediate: (
+            f"union_data(({self.function_string(immediate)}), ({other.function_string(immediate)}))"
+            if immediate else f"pd.concat([{self.function_string(immediate)}, {other.function_string(immediate)}])"),
+                          leaves={**self.leaves, **other.leaves},
+                          time_expression=lambda immediate: f"pd.concat([{self.time_expression(immediate)}, {other.time_expression(immediate)}])")
     
     def impute(self, method='mean', constant_value=None):
         if method == 'constant':
@@ -517,8 +545,9 @@ class Attributes(TimeSeriesQueryable):
     def get_ids(self):
         return self.series.index
     
-    def get_values(self):
-        return self.series.reset_index(drop=True)
+    def get_values(self): 
+        # commenting out reset_index because in impute, we need to keep track of the value indexes to reassign in with_values
+        return self.series #.reset_index(drop=True)
     
     def compress(self):
         """Returns a new TimeSeries with values compressed to the minimum size
@@ -572,7 +601,7 @@ class Attributes(TimeSeriesQueryable):
         if isinstance(other, (Events, Intervals, TimeIndex, TimeSeries, Compilable)):
             return NotImplemented
         if isinstance(other, Attributes):
-            return Attributes(self.preserve_nans(getattr(self.series, opname)(other.series).rename(self.name)))
+            return Attributes(self.preserve_nans(getattr(self.series, opname)(make_aligned_value_series(self, other)).rename(self.name)))
         if isinstance(other, Duration):
             return Attributes(self.preserve_nans(getattr(self.series, opname)(other.value_like(self.series)).rename(self.name)))
         return Attributes(self.preserve_nans(getattr(self.series, opname)(other)))
@@ -951,7 +980,10 @@ class EventSet(TimeSeriesQueryable):
         
 class Intervals(TimeSeriesQueryable):
     def __init__(self, df, type_field="intervaltype", start_time_field="starttime", end_time_field="endtime", value_field="value", id_field="id", name=None):
-        self.df = df.sort_values([id_field, start_time_field], kind='stable').reset_index(drop=True)
+        self.df = df.assign(**{
+            start_time_field: df[[start_time_field, end_time_field]].min(axis=1),
+            end_time_field: df[[start_time_field, end_time_field]].max(axis=1),
+        }).sort_values([id_field, start_time_field], kind='stable').reset_index(drop=True)
         self.type_field = type_field
         self.start_time_field = start_time_field
         self.end_time_field = end_time_field
@@ -1453,7 +1485,26 @@ class TimeIndex(TimeSeriesQueryable):
         
     @staticmethod
     def from_events(events, starts=None, ends=None, return_filtered_events=False):
-        """Creates a time index from the timesteps and IDs represented in the given
+        """Creates a time index from the values and IDs represented in the given
+        Events object"""
+        event_times = events.df[[events.id_field, events.value_field]]
+        mask = np.ones(len(event_times), dtype=bool)
+        if starts is not None:
+            mask &= event_times[events.value_field] >= make_aligned_value_series(events, starts)
+        if ends is not None:
+            mask &= event_times[events.value_field] < make_aligned_value_series(events, ends)
+        # Don't deduplicate times, for consistency with other operations
+        # mask &= ~event_times.duplicated([events.id_field, events.time_field])
+        result = TimeIndex(event_times[mask].reset_index(drop=True), 
+                         id_field=events.id_field, 
+                         time_field=events.value_field)
+        if return_filtered_events:
+            return result, events.filter(mask)
+        return result
+        
+    @staticmethod
+    def from_event_times(events, starts=None, ends=None, return_filtered_events=False):
+        """Creates a time index from the times and IDs represented in the given
         Events object"""
         event_times = events.df[[events.id_field, events.time_field]]
         mask = np.ones(len(event_times), dtype=bool)
@@ -1489,7 +1540,7 @@ class TimeIndex(TimeSeriesQueryable):
         indexes = []
         for time_element in times:
             if isinstance(time_element, (Events, EventSet)):
-                indexes.append(TimeIndex.from_events(time_element))
+                indexes.append(TimeIndex.from_event_times(time_element))
             elif isinstance(time_element, Attributes):
                 indexes.append(TimeIndex.from_attributes(time_element))
             elif isinstance(time_element, TimeIndex):
@@ -1513,10 +1564,10 @@ class TimeIndex(TimeSeriesQueryable):
         combined = pd.DataFrame({starts.id_field: starts.get_ids(), "start": starts.get_times(), "end": ends.get_times()})
         is_dt = False
         if is_datetime_or_timedelta(combined["start"].dtype):
-            combined["start"] = (combined["start"].astype(int)/ 10**9).astype(int)
+            combined["start"] = (combined["start"].astype("datetime64[ns]").astype(int)/ 10**9).astype(int)
             is_dt = True
         if is_datetime_or_timedelta(combined["end"].dtype):
-            combined["end"] = (combined["end"].astype(int)/ 10**9).astype(int)
+            combined["end"] = (combined["end"].astype("datetime64[ns]").astype(int)/ 10**9).astype(int)
             is_dt = True
             
         # remove nan times

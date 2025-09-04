@@ -17,6 +17,7 @@ For example, to get observations for respiratory rate, the following queries cou
 - `{scope = observations; name contains /(breath|resp\w+) rate/I}`
 
 You can also use a shorthand for extracting a single concept by name by removing the 'name = ' portion like so: `{Respiratory Rate; scope = observations}`.
+To retrieve attributes (one value per trajectory), you can simply use the attribute name: for example, `{Gender}`. For events and intervals, prefer to specify the scope in which the data is found.
 
 Data element queries can then be operated on using arithmetic and logical operations similar to SQL. By default, operations apply to the value associated with a data field (such as a temperature measurement). The following examples demonstrate valid TempoQL syntax:
 
@@ -33,6 +34,7 @@ An important part of TempoQL syntax is **aggregations**, which result in a Time 
 Durations are expressed as a number plus an English unit of time, e.g. `4 hours`, `3 days`, `30 seconds`, `1 hour`.
 
 Each aggregation is computed over the observations that fall within the provided *aggregation bounds*, which are typically a function of the special marker `#now` (which represents the time of the current timestep). For example, the aggregation bounds `from #now - 4 hours to #now` would extract observations in the 4 hours preceding each time in the timestep definition. The shorthands `before <time>`, `after <time>`, and `at <time>` are available. The markers `#mintime` and `#maxtime` can be used to represent the earliest and latest observations for each patient.
+If there is no timestep definition in the entire expression, the aggregation will be dependent only on the times at which the aggregation bounds occur. The #now keyword cannot be used if no timestep definition is provided.
 
 The aggregation function to be applied over all observations must be one of the following: sum, mean, median, min, max, first, last, any, all, all nonnull, exists, exists nonnull, count, count distinct, count distinct nonnull, count nonnull, or integral. Each function always produces a single scalar value over all matching observations.
 
@@ -42,6 +44,7 @@ Below are some examples of aggregation expressions and what they do:
 - `last {Temperature Celsius} from #now - 1 hour to #now every 4 hours from {Admission Time} to {Discharge Time}`: assumes there are attributes called Admission Time and Discharge Time, and computes the most recent temperature in the last hour at 4-hour timepoints.
 - `mean {Heart Rate} from #now - 8 hours to #now every 1 day` - calculates the average heart rate over the last 8 hours at timepoints 1 day apart from each patient's earliest observation to their latest.
 - `exists {name contains /heart disease/i; scope = Diagnosis} before #now at every {Admission}` - assumes there is an event called Admission, and looks for diagnosis events related to heart disease before each admission event.
+- `first time({Extubation; scope = Procedure}) after time({Intubation; scope = Procedure})` - returns a value for every intubation event, where the value is the time of the next extubation event.
 
 The following additional features are available in TempoQL:
 - String and regex operations (contains, startswith, endswith), e.g. `{Heart Rhythm} contains /fibrillation/i`
@@ -62,10 +65,8 @@ You can use the following functions to transform values:
 
 ---
 
-Here is the Table Context for the dataset you will be working with:
+Here is the Table Context for the dataset you will be working with. You will not have access to the data itself, only this specification and the names and IDs of concepts/data elements stored within the data.
 
 ```
 <DATASET_INFO>
 ```
-
-You will not have access to the data itself, only this specification and the names and IDs of concepts/data elements stored within the data. When appropriate, acknowledge that you cannot access the underlying data for privacy reasons.

@@ -115,12 +115,14 @@
       Answer
     </button>
     <div class="flex-auto" />
-    <div
-      class="flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300"
+    <button
+      on:click={onHistoryClick}
+      class="px-3 py-1.5 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
+      title="View AI question/answer history"
     >
-      <Fa icon={apiStatusInfo.icon} class="inline mr-2" />
-      {apiStatus}
-    </div>
+      <Fa icon={faClock} class="inline mr-2" />
+      History
+    </button>
   </div>
 
   <!-- AI Input Section -->
@@ -140,15 +142,6 @@
       <div
         class="absolute right-0 bottom-0 mr-4 mb-4 flex justify-end items-center gap-2 z-50"
       >
-        <button
-          on:click={onHistoryClick}
-          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
-          title="View query history"
-        >
-          <Fa icon={faClock} class="inline mr-2" />
-          History
-        </button>
-
         <!-- Run Button -->
         <button
           class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"

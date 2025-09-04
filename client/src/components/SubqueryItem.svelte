@@ -36,16 +36,18 @@
   <!-- Header with dropdown arrow -->
   <button
     on:click={toggleExpanded}
-    class="w-full px-3 py-2 text-left flex items-center justify-between bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors duration-200 focus:outline-none"
+    class="block w-full px-3 py-2 text-left flex items-center justify-between bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors duration-200 focus:outline-none"
   >
-    <span
-      class="text-sm font-mono text-gray-700 dark:text-gray-300 truncate flex-1"
+    <div
+      class="text-sm font-mono text-gray-700 dark:text-gray-300 flex-auto w-0 {isExpanded
+        ? 'whitespace-normal'
+        : 'truncate'}"
     >
       {queryText}
-    </span>
+    </div>
     <Fa
       icon={isExpanded ? faChevronUp : faChevronDown}
-      class="text-gray-600 dark:text-gray-300"
+      class="text-gray-600 dark:text-gray-300 shrink-0"
     />
   </button>
 

@@ -123,7 +123,8 @@ class MEDSDataset(GenericDataset):
         return Attributes(max_times)
     
     def attempt_attribute_extract(self, concept_name_query):
-        print("Attempting attribute extract for", concept_name_query)
+        if self.verbose:
+            print("Attempting attribute extract for", concept_name_query)
         matching_rows = self.data[self.data[self.code_field].isin(self.concepts[concept_name_query.filter_series(self.concepts[self.concept_name_field])][self.concept_id_field]) &
                                   pd.isna(self.data[self.time_field])]
         if len(matching_rows):
@@ -141,7 +142,6 @@ class MEDSDataset(GenericDataset):
         return {}
     
     def search_concept_id(self, concept_id_query=None, concept_name_query=None, scope=None):
-        print("Searching concept ids for", concept_id_query, concept_name_query)
         results = {}
         if scope is not None:
             relevant_concepts = self.concepts[self.concepts[SCOPE_FIELD] == scope]
@@ -158,7 +158,6 @@ class MEDSDataset(GenericDataset):
         return results
     
     def extract_data_for_concepts(self, scope, concepts, value_field=None):
-        print("Extracting data for", scope, concepts, value_field)
         df = self.data[self.data[self.code_field].isin([c[0] for c in concepts])]
         value_field_name = value_field or self.value_fields[0]
         sub_df = df[[self.id_field, self.time_field, self.code_field, value_field_name]].copy()

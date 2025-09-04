@@ -12,7 +12,14 @@
     formatQueryForHighlights,
   } from '../utils/syntaxHighlight';
   import Fa from 'svelte-fa';
-  import { faClock, faPlay, faSave } from '@fortawesome/free-solid-svg-icons';
+  import {
+    faClock,
+    faCopy,
+    faCirclePlay,
+    faSave,
+    faRotateLeft,
+  } from '@fortawesome/free-solid-svg-icons';
+  import { faCirclePlay as faCirclePlayOutline } from '@fortawesome/free-regular-svg-icons';
 
   export let value: string = '';
   export let onInput: (val: string) => void = () => {};
@@ -20,8 +27,11 @@
   export let dataFields: string[] = [];
   export let onRun: () => void = () => {};
   export let onSaveAs: (name: string) => void = () => {};
+  export let onSave: () => void = () => {};
+  export let onDiscard: () => void = () => {};
   export let onExplain: () => void = () => {};
   export let onHistoryClick: () => void = () => {};
+  export let hasUnsavedChanges: boolean = false;
   export let allowSave: boolean = false;
 
   let textarea: HTMLTextAreaElement;
@@ -207,11 +217,13 @@
         return;
       } else if (event.key === 'Enter' && event.shiftKey) {
         event.preventDefault();
+        if (allowSave) onSave();
         onRun();
         return;
-      } else if (event.key === 's' && !event.shiftKey && allowSave) {
+      } else if (event.key === 's' && allowSave) {
         event.preventDefault();
-        saveAs();
+        if (!event.shiftKey) onSave();
+        else saveAs();
       }
     }
 
@@ -390,37 +402,49 @@
     >
       Explain
     </button> -->
-      <button
-        on:click={onHistoryClick}
-        class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
-        title="View query history"
-      >
-        <Fa icon={faClock} class="inline mr-2" />
-        History
-      </button>
-
       {#if allowSave}
-        <button
-          on:click={saveAs}
-          class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
-          title="Save this query to a new variable (Ctrl+S)"
-        >
-          <Fa icon={faSave} class="inline mr-2" />
-          Save As...
-        </button>
+        {#if hasUnsavedChanges}
+          <button
+            on:click={onDiscard}
+            class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white whitespace-nowrap"
+            title="Discard changes"
+          >
+            <Fa icon={faRotateLeft} class="inline mr-2" />
+            Revert
+          </button>
+          <button
+            on:click={onRun}
+            class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
+            title="Run this query without saving it"
+          >
+            <Fa icon={faCirclePlayOutline} class="inline mr-2" />
+            Run
+          </button>
+          <button
+            on:click={onSave}
+            class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-200 hover:bg-blue-200/50 dark:bg-blue-200/40 dark:hover:bg-blue-200/60 dark:text-white"
+            title="Save this query (Ctrl+S)"
+          >
+            <Fa icon={faSave} class="inline mr-2" />
+            Save
+          </button>
+        {/if}
       {/if}
 
       <!-- Run Button -->
       <button
         class="px-4 py-1 font-semibold rounded-md transition-colors duration-200 bg-blue-600 hover:bg-blue-500 text-white"
-        on:click={onRun}
+        on:click={() => {
+          if (allowSave) onSave();
+          onRun();
+        }}
         disabled={!value.trim()}
         class:opacity-50={!value.trim()}
         class:cursor-not-allowed={!value.trim()}
         title="Run the query on the dataset (Ctrl+Shift+Enter)"
       >
-        <Fa icon={faPlay} class="inline mr-2" />
-        {allowSave ? 'Save and Run' : 'Run Query'}
+        <Fa icon={faCirclePlay} class="inline mr-2" />
+        {allowSave && hasUnsavedChanges ? 'Save and Run' : 'Run Query'}
       </button>
     </div>
   </div>

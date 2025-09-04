@@ -99,9 +99,12 @@ def eicu(table_prefix='physionet-data.eicu_crd.'):
         },
         {
             'source': table_prefix + 'patient',
+            'primary_id_table': True,
             'id_field': 'patientunitstayid',
             'attributes': {
-                k: { 'value_field': k.lower().replace(' ', '') }
+                k: { 'value_field': k.lower().replace(' ', ''), 
+                     **({'value_transform': lambda x: x * 60} if k.endswith('Offset') else {})
+                }
                 for k in [
                     'Gender', 'Age', 'Ethnicity',
                     'Admission Height', 'Admission Weight', 'Discharge Weight',
@@ -184,13 +187,14 @@ def eicu(table_prefix='physionet-data.eicu_crd.'):
         }
     ]
     
-    return DatasetFormat(tables, [], [])
+    return DatasetFormat(tables, [], {})
 
 def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physionet-data.mimiciv_3_1_icu.'):
     tables = [
         {
             'source': hosp_prefix + 'admissions',
             'id_field': 'stay_id',
+            'scope': 'Patient',
             'attributes': {
                 'Marital Status': { 'value_field': 'marital_status' },
                 'Race': { 'value_field': 'race' },
@@ -228,6 +232,7 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
         {
             'source': hosp_prefix + 'patients',
             'id_field': 'stay_id',
+            'scope': 'Patient',
             'attributes': {
                 'Gender': { 'value_field': 'gender' },
                 'Anchor Age': { 'value_field': 'anchor_age' },
@@ -256,7 +261,9 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
         },
         {
             'source': icu_prefix + 'icustays',
+            'primary_id_table': True,
             'id_field': 'stay_id',
+            'scope': 'Patient',
             'attributes': {
                 'Admit Time': { 'value_field': 'intime' },
                 'Discharge Time': { 'value_field': 'outtime' },
@@ -332,12 +339,13 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
     
     return DatasetFormat(tables, vocabularies, joins)
 
-def omop(table_prefix=''):
+def omop(table_prefix='', id_field='visit_occurrence_id'):
+    assert id_field in ('visit_occurrence_id', 'person_id'), f"Don't know how to set up OMOP dataset specification for ID field '{id_field}'"
     tables = [
         {
             'source': table_prefix + 'drug_exposure',
             'type': 'interval',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
             'concept_id_field': 'drug_source_concept_id',
             'start_time_field': 'drug_exposure_start_datetime',
             'end_time_field': 'drug_exposure_end_datetime',
@@ -347,7 +355,7 @@ def omop(table_prefix=''):
         {
             'source': table_prefix + 'condition_occurrence',
             'type': 'interval',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
             'concept_id_field': 'condition_source_concept_id',
             'start_time_field': 'condition_start_datetime',
             'end_time_field': 'condition_end_datetime',
@@ -356,7 +364,7 @@ def omop(table_prefix=''):
         {
             'source': table_prefix + 'procedure_occurrence',
             'type': 'event',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
             'concept_id_field': 'procedure_source_concept_id',
             'time_field': 'procedure_datetime',
             'scope': 'Procedure'
@@ -364,7 +372,7 @@ def omop(table_prefix=''):
         {
             'source': table_prefix + 'observation',
             'type': 'event',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
             'concept_id_field': 'observation_source_concept_id',
             'time_field': 'observation_datetime',
             'default_value_field': 'value_as_string',
@@ -373,7 +381,7 @@ def omop(table_prefix=''):
         {
             'source': table_prefix + 'measurement',
             'type': 'event',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
             'concept_id_field': 'measurement_source_concept_id',
             'time_field': 'measurement_datetime',
             'default_value_field': 'value_as_number',
@@ -382,7 +390,7 @@ def omop(table_prefix=''):
         {
             'source': table_prefix + 'device_exposure',
             'type': 'interval',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
             'concept_id_field': 'device_source_concept_id',
             'start_time_field': 'device_exposure_start_datetime',
             'end_time_field': 'device_exposure_end_datetime',
@@ -391,23 +399,26 @@ def omop(table_prefix=''):
         {
             'source': table_prefix + 'visit_occurrence',
             'type': 'interval',
+            'primary_id_table': id_field == 'visit_occurrence_id',
             'id_field': 'visit_occurrence_id',
             'start_time_field': 'visit_start_datetime',
             'end_time_field': 'visit_end_datetime',
             'interval_type': 'Visit',
             'scope': 'Visit',
-            'attributes': {
+            **({'attributes': {
                 'Admit Time': {
                     'value_field': 'visit_start_datetime'
                 },
                 'Discharge Time': {
                     'value_field': 'visit_end_datetime'
                 }
-            }
+            }} if id_field == 'visit_occurrence_id' else {})
         },
         {
             'source': table_prefix + 'person',
-            'id_field': 'visit_occurrence_id',
+            'id_field': id_field,
+            'scope': 'Person',
+            'primary_id_table': id_field == 'person_id',
             'attributes': {
                 'Gender': {
                     'value_field': 'gender_concept_id',
@@ -444,4 +455,14 @@ def omop(table_prefix=''):
         }
     ]
     
-    return DatasetFormat(tables, vocabularies, [])
+    if id_field == 'visit_occurrence_id':
+        joins = {
+            table_prefix + 'person': {
+                'dest_table': table_prefix + 'visit_occurrence',
+                'join_key': 'person_id'
+            }
+        }
+    else:
+        joins = {}
+    
+    return DatasetFormat(tables, vocabularies, joins)
