@@ -2,6 +2,11 @@ import pandas as pd
 import numpy as np
 import sys
 from .data_types import *
+import os
+import json
+import uuid
+from collections.abc import MutableMapping
+
 
 def select_time_unit(seconds_range):
     if seconds_range >= 365 * 24 * 3600:
@@ -230,3 +235,123 @@ def unflatten_dict(flat_dict):
     for k, v in flat_dict.items():
         place(result, k, v)
     return result
+
+class DataFrameCache(MutableMapping):
+    """
+    Caches pandas dataframes in a local directory. (Implemented by GPT-5)
+    """
+    def __init__(self, directory, file_format="parquet"):
+        if file_format not in {"csv", "parquet", "arrow", "pickle"}:
+            raise ValueError("file_format must be one of: csv, parquet, arrow, pickle")
+
+        self.directory = directory
+        if not os.path.exists(self.directory):
+            os.mkdir(self.directory)
+
+        self.file_format = file_format
+        self.meta_path = os.path.join(self.directory, "metadata.json")
+
+        # Load or initialize metadata
+        if os.path.exists(self.meta_path):
+            with open(self.meta_path, "r") as f:
+                self.metadata = json.load(f)
+        else:
+            self.metadata = {}
+            self._save_metadata()
+
+    def _encode_key(self, key):
+        """Convert Python object -> JSON string for storage."""
+        return json.dumps(key, sort_keys=True)
+
+    def _decode_key(self, key_json):
+        """Convert JSON string -> Python object."""
+        return json.loads(key_json)
+    
+    def _save_metadata(self):
+        with open(self.meta_path, "w") as f:
+            json.dump(self.metadata, f, indent=2)
+
+    def _save_dataframe(self, df, path):
+        if self.file_format == "csv":
+            df.to_csv(path, index=False)
+        elif self.file_format == "parquet":
+            df.to_parquet(path, index=False)
+        elif self.file_format == "arrow":
+            df.to_feather(path)
+        elif self.file_format == "pickle":
+            df.to_pickle(path)
+
+    def _load_dataframe(self, path):
+        if self.file_format == "csv":
+            return pd.read_csv(path)
+        elif self.file_format == "parquet":
+            return pd.read_parquet(path)
+        elif self.file_format == "arrow":
+            return pd.read_feather(path)
+        elif self.file_format == "pickle":
+            return pd.read_pickle(path)
+
+    # --- MutableMapping API ---
+    def __getitem__(self, key):
+        encoded_key = self._encode_key(key)
+        if encoded_key not in self.metadata:
+            raise KeyError(key)
+        return self._load_dataframe(os.path.join(self.directory, self.metadata[encoded_key]["path"]))
+
+    def __setitem__(self, key, value):
+        if not isinstance(value, pd.DataFrame):
+            raise TypeError("Value must be a pandas DataFrame")
+
+        encoded_key = self._encode_key(key)
+        if encoded_key not in self.metadata:
+            # New entry
+            path = f"{uuid.uuid4().hex}.{self.file_format}"
+            self.metadata[encoded_key] = {"path": path}
+        else:
+            # Overwrite existing
+            path = self.metadata[encoded_key]["path"]
+
+        full_path = os.path.join(self.directory, path)
+        self._save_dataframe(value, full_path)
+        self._save_metadata()
+
+    def __delitem__(self, key):
+        encoded_key = self._encode_key(key)
+        if encoded_key not in self.metadata:
+            raise KeyError(key)
+
+        # Remove file if exists
+        filepath = os.path.join(self.directory, self.metadata[encoded_key]["path"])
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+        # Remove metadata
+        del self.metadata[encoded_key]
+        self._save_metadata()
+
+    def __iter__(self):
+        return (self._decode_key(entry) for entry in self.metadata)
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __contains__(self, key):
+        return self._encode_key(key) in self.metadata
+
+    def keys(self):
+        return [self._decode_key(entry["key"]) for entry in self.metadata]
+
+    def values(self):
+        return [self[k] for k in self.keys()]
+
+    def items(self):
+        return [(self._decode_key(entry["key"]), self[self._decode_key(entry["key"])]) for entry in self.metadata]
+
+    def clear(self):
+        """Remove all cached data and metadata."""
+        for entry in self.metadata:
+            path = os.path.join(self.directory, entry["path"])
+            if os.path.exists(path):
+                os.remove(path)
+        self.metadata = {}
+        self._save_metadata()

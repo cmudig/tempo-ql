@@ -9,7 +9,7 @@ import json
 import datetime
 from copy import deepcopy
 from ..data_types import *
-from ..utils import convert_to_native_types
+from ..utils import convert_to_native_types, DataFrameCache
 
 class ConceptFilter:
     def __init__(self, query_type, query_data):
@@ -80,6 +80,8 @@ class GenericDataset:
                  dataset_format, 
                  schema_name=None, 
                  scratch_schema_name='auto', 
+                 data_elements_cache_dir=None,
+                 table_row_limit=None,
                  verbose=False,
                  id_field_transform=None,
                  time_field_transform=None):
@@ -116,6 +118,12 @@ class GenericDataset:
         * scratch_schema_name: Schema to use for tables written by this object
             in the database. If not provided or 'auto', uses the schema_name
             parameter.
+        * data_element_cache_dir: Directory in which to persist data element
+            information; if not provided, this information is computed when
+            list_data_elements is called and cached in memory.
+        * table_row_limit: A limit to apply on results. This
+            is only for debugging purposes - use GenericDataset.set_trajectory_ids()
+            to control which trajectories are returned.
         * verbose: Whether to log the database operations as they are performed.
         * id_field_transform: A SQLAlchemy-compatible function to apply on the
             ID fields. **This will be computed in the database.**
@@ -138,8 +146,9 @@ class GenericDataset:
         self.id_field_transform = id_field_transform or (lambda x: x)
         self.time_field_transform = time_field_transform or (lambda x: x)
         self.id_field_joins = dataset_format.joins or {}
+        self.table_row_limit = table_row_limit
         self._captured_queries = []
-        self._name_list_cache = {}
+        self._name_list_cache = DataFrameCache(data_elements_cache_dir) if data_elements_cache_dir is not None else {}
         self._cte_cache = {}
         self._id_cache = None
         
@@ -249,7 +258,7 @@ class GenericDataset:
                     stmt = select(id_table.c["id"]).distinct().select_from(self._limit_trajectory_ids(id_table, "id"))
                     if self.verbose:
                         print(f"Querying primary ID table ({primary_id_table['source']}) to get the list of trajectory IDs")
-                    result = self._execute_query(conn, stmt).fetchall()
+                    result = self._fetch_rows(self._execute_query(conn, stmt))
                     self._id_cache = pd.DataFrame(result, columns=["id"])["id"]
             else:
                 with self.engine.connect() as conn:
@@ -264,7 +273,7 @@ class GenericDataset:
                     stmt = select(unioned_tables.c["id"]).distinct().select_from(self._limit_trajectory_ids(unioned_tables, "id"))
                     if self.verbose:
                         print(f"Querying all known tables to get the list of trajectory IDs")
-                    result = self._execute_query(conn, stmt).fetchall()
+                    result = self._fetch_rows(self._execute_query(conn, stmt))
                     self._id_cache = pd.DataFrame(result, columns=["id"])["id"]
         return self._id_cache
     
@@ -288,6 +297,11 @@ class GenericDataset:
         self._capture_sql_query(stmt)
         return conn.execute(stmt)
         
+    def _fetch_rows(self, result):
+        if self.table_row_limit is not None:
+            return result.fetchmany(self.table_row_limit)
+        return result.fetchall()
+
     def search_concept_id(self, concept_id_query=None, concept_name_query=None, scope=None):
         """
         Search for concept IDs for a given name using the available vocabularies.
@@ -401,7 +415,7 @@ class GenericDataset:
                     if self.verbose:
                         print(f"Querying table {table_name} for attribute {concept_name_query.query_data}")
                 result = self._execute_query(conn, stmt)
-                result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
                 candidates.append(Attributes(result_df.set_index(table_info['id_field'])[attr_info['value_field']]))
                 
         if len(candidates) == 0: return
@@ -453,7 +467,7 @@ class GenericDataset:
                             if self.verbose:
                                 print(f"Searching table {table_name} for event named {matching_key}")
                             result = self._execute_query(conn, stmt)
-                            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                            result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
                         candidates.setdefault(table_scope, []).append(result_df)
                 else:      
                     if 'event_type' in table_info and not name_query.matches_value(table_info['event_type']):
@@ -492,7 +506,7 @@ class GenericDataset:
                         if table_info.get('filter_nulls', False) and vf is not None:
                             stmt = stmt.where(self._get_table(table_info).c[vf] != None)
                         result = self._execute_query(conn, stmt)
-                        result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
+                        result_df = pd.DataFrame(self._fetch_rows(result), columns=list(result.keys()))
                         candidates.setdefault(table_scope, []).append(result_df)
             if (('interval_type' in table_info or 'interval_type_field' in table_info or 'intervals' in table_info) and
                 not (return_type is not None and return_type != 'interval')):
@@ -520,7 +534,7 @@ class GenericDataset:
                             if self.verbose:
                                 print(f"Searching table {table_name} for interval named {matching_key}")
                             result = self._execute_query(conn, stmt)
-                            result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
+                            result_df = pd.DataFrame(self._fetch_rows(result), columns=list(result.keys()))
                             candidates.setdefault(table_scope, []).append(result_df)
                 else:
                     if 'interval_type' in table_info and not name_query.matches_value(table_info['interval_type']):
@@ -561,7 +575,7 @@ class GenericDataset:
                         if table_info.get('filter_nulls', False) and vf is not None:
                             stmt = stmt.where(self._get_table(table_info).c[vf] != None)
                         result = self._execute_query(conn, stmt)
-                        result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys()))
+                        result_df = pd.DataFrame(self._fetch_rows(result), columns=list(result.keys()))
                         candidates.setdefault(table_scope, []).append(result_df)
                         
             if candidates and return_type is None: return_type = table_info['type']
@@ -683,7 +697,7 @@ class GenericDataset:
                 stmt = base_query.where(
                     table.c[table_info['concept_id_field']].in_([c[0] for c in concepts]))
                 result = self._execute_query(conn, stmt)
-                result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
                 results.append(result_df)
             
         concat_df = pd.concat([r for r in results if len(r)], axis=0, ignore_index=True)    
@@ -728,7 +742,7 @@ class GenericDataset:
             ).cte('all_times')
             stmt = select(all_times.c.id, func.min(all_times.c.mintime).label('mintime')).group_by(all_times.c.id)
             result = self._execute_query(conn, stmt)
-            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             return Attributes(result_df.set_index('id')['mintime'])
         
     def get_max_times(self):
@@ -760,7 +774,7 @@ class GenericDataset:
             except Exception as e:
                 stmt = select(all_times.c.id, func.datetime_add(func.max(all_times.c.maxtime), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
-            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             return Attributes(result_df.set_index('id')['maxtime'])
         
     def get_data_for_scope(self, scope, value_field=None):
@@ -780,7 +794,7 @@ class GenericDataset:
                 tables.append(self._base_query_for_table(table_info, value_field=value_field))
                     
             result = self._execute_query(conn, union(*tables))
-            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             
         if return_type == 'event':
             result = Events(result_df,
@@ -976,7 +990,7 @@ class GenericDataset:
             
             cache_key = (table_info['source'], return_counts)
             if cache_key in self._name_list_cache:
-                type_names += self._name_list_cache[cache_key]
+                type_names.append(self._name_list_cache[cache_key])
                 continue
             
             if cache_only: continue
@@ -1042,7 +1056,7 @@ class GenericDataset:
                             else:
                                 stmt = select(distinct(table.c[table_info[type_field]].label('name')))
                             result = self._execute_query(conn, stmt)
-                            result_df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                            result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
                             result_df = result_df.assign(
                                 id=result_df['name'],
                                 scope=table_info.get('scope'), 
@@ -1103,14 +1117,14 @@ class GenericDataset:
                                         table.c[table_info['concept_id_field']] == vocabulary_tables.c['id'])
                             ).group_by(vocabulary_tables.c['name'], vocabulary_tables.c['id'])
                             result = self._execute_query(conn, stmt)
-                            result_df = pd.DataFrame(result.fetchall(), columns=list(result.keys())).assign(
+                            result_df = pd.DataFrame(self._fetch_rows(result), columns=list(result.keys())).assign(
                                 scope=table_info.get('scope'),
                                 type=table_info['type']
                             )
                             scope_names.append(result_df)
             except Exception as e:
                 raise type(e)(f"Error listing data elements for scope '{table_info['scope']}': {e}")
-            self._name_list_cache[cache_key] = scope_names
+            self._name_list_cache[cache_key] = pd.concat(scope_names)
             type_names += scope_names
         
         if not type_names:
