@@ -783,7 +783,7 @@ class GenericDataset:
         with self.engine.connect() as conn:
             if primary_time_table is not None and "source" in primary_time_table and "id_field" in primary_time_table:
                 if self.verbose:
-                    print(f"Querying primary ID table ({primary_time_table['source']}) to get min times")
+                    print(f"Querying primary ID table ({primary_time_table['source']}) to get max times")
                 time_table = self._get_table(primary_time_table)
                 combined_times = []
                 if "start_time_field" in primary_time_table:
@@ -804,7 +804,7 @@ class GenericDataset:
                 all_times = union(*combined_times).cte('all_times')
             else:
                 if self.verbose:
-                    print(f"Querying ALL tables with times to get min times")
+                    print(f"Querying ALL tables with times to get max times")
                 all_times = union(
                     *(select(
                         self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),

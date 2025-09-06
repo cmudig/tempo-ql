@@ -263,7 +263,7 @@ class Compilable:
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
         starts = np.array(start_times.get_times(), dtype=np.int64)
         ends = np.array(end_times.get_times(), dtype=np.int64)
-        assert (starts <= ends).all(), "Start times must be <= end times"
+        assert len(starts) == len(ends), "Start and end times must be same length"
         
         # TODO: This method of combining inputs in matrices only works when all
         # inputs are numerical. If a preaggregated input is a string, the line
@@ -830,7 +830,7 @@ class Events(TimeSeriesQueryable):
             ends = np.array(end_times.get_times(), dtype=np.int64)
         else:
             raise ValueError("Start times, end times and event times must all be of the same type (either datetime or numeric)")
-        assert (starts <= ends).all(), "Start times must be <= end times"
+        assert len(starts) == len(ends), "Start and end times must be same length"
         
         event_ids, event_times, event_values, uniques = self.prepare_aggregation_inputs(agg_func)
         
@@ -1200,7 +1200,7 @@ class Intervals(TimeSeriesQueryable):
         else:
             raise ValueError("Start times, end times and event times must all be of the same type (either datetime or numeric)")
 
-        assert (starts <= ends).all(), "Start times must be <= end times"
+        assert len(starts) == len(ends), "Start and end times must be same length"
         
         event_ids, interval_starts, interval_ends, interval_values, uniques = self.prepare_aggregation_inputs(agg_func)
         
