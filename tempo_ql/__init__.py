@@ -19,8 +19,6 @@ from .data_types import (
     TimeSeries, 
     TimeSeriesSet
 )
-from .omop import OMOPDataset
-from .tempo_csv import TempoCSVDataset
 from .meds import MEDSDataset
 from .generic import GenericDataset
 from .generic.variable_store import DatabaseVariableStore, FileVariableStore
