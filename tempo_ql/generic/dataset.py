@@ -724,6 +724,11 @@ class GenericDataset:
         for that trajectory ID in the dataset.
         """
         primary_time_table = next((t for t in self.tables if t.get('primary_time_table')), None)
+        def convert_time_value(time_col):
+            if issubclass(type(time_col.type), Date):
+                time_col = cast(time_col, DateTime)
+            return time_col
+            
         with self.engine.connect() as conn:
             if primary_time_table is not None and "source" in primary_time_table and "id_field" in primary_time_table:
                 if self.verbose:
@@ -733,17 +738,17 @@ class GenericDataset:
                 if "start_time_field" in primary_time_table:
                     combined_times.append(select(
                         self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
-                        self.time_field_transform(time_table.c[primary_time_table['start_time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(time_table.c[primary_time_table['start_time_field']])).label('time')
                     ))
                 if "end_time_field" in primary_time_table:
                     combined_times.append(select(
                         self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
-                        self.time_field_transform(time_table.c[primary_time_table['end_time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(time_table.c[primary_time_table['end_time_field']])).label('time')
                     ))
                 if "time_field" in primary_time_table:
                     combined_times.append(select(
                         self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
-                        self.time_field_transform(time_table.c[primary_time_table['time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(time_table.c[primary_time_table['time_field']])).label('time')
                     ))
                 all_times = union(*combined_times).cte('all_times')
             else:
@@ -752,24 +757,21 @@ class GenericDataset:
                 all_times = union(
                     *(select(
                         self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                        self.time_field_transform(self._get_table(scope_info).c[scope_info['start_time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(self._get_table(scope_info).c[scope_info['start_time_field']])).label('time')
                     ).select_from(self._limit_trajectory_ids(
                         self._get_table(scope_info), 
                         scope_info['id_field']
                     )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
                     *(select(
                         self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                        self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']])).label('time')
                     ).select_from(self._limit_trajectory_ids(
                         self._get_table(scope_info), 
                         scope_info['id_field']
                     )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
                 ).cte('all_times')
-            if issubclass(type(all_times.c.time.type), Date):
-                time_col = cast(all_times.c.time, DateTime)
-            else:
-                time_col = all_times.c.time
-            stmt = select(all_times.c.id, func.min(time_col).label('mintime')).group_by(all_times.c.id)
+            
+            stmt = select(all_times.c.id, func.min(all_times.c.time).label('mintime')).group_by(all_times.c.id)
             result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             return Attributes(result_df.set_index('id')['mintime'])
@@ -780,6 +782,11 @@ class GenericDataset:
         for that trajectory ID in the dataset.
         """
         primary_time_table = next((t for t in self.tables if t.get('primary_time_table')), None)
+        def convert_time_value(time_col):
+            if issubclass(type(time_col.type), Date):
+                time_col = cast(time_col, DateTime)
+            return time_col
+        
         with self.engine.connect() as conn:
             if primary_time_table is not None and "source" in primary_time_table and "id_field" in primary_time_table:
                 if self.verbose:
@@ -789,17 +796,17 @@ class GenericDataset:
                 if "start_time_field" in primary_time_table:
                     combined_times.append(select(
                         self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
-                        self.time_field_transform(time_table.c[primary_time_table['start_time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(time_table.c[primary_time_table['start_time_field']])).label('time')
                     ))
                 if "end_time_field" in primary_time_table:
                     combined_times.append(select(
                         self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
-                        self.time_field_transform(time_table.c[primary_time_table['end_time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(time_table.c[primary_time_table['end_time_field']])).label('time')
                     ))
                 if "time_field" in primary_time_table:
                     combined_times.append(select(
                         self.id_field_transform(time_table.c[primary_time_table['id_field']]).label('id'),
-                        self.time_field_transform(time_table.c[primary_time_table['time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(time_table.c[primary_time_table['time_field']])).label('time')
                     ))
                 all_times = union(*combined_times).cte('all_times')
             else:
@@ -808,29 +815,25 @@ class GenericDataset:
                 all_times = union(
                     *(select(
                         self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                        self.time_field_transform(self._get_table(scope_info).c[scope_info['end_time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(self._get_table(scope_info).c[scope_info['end_time_field']])).label('time')
                     ).select_from(self._limit_trajectory_ids(
                         self._get_table(scope_info), 
                         scope_info['id_field']
                     )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'interval'),
                     *(select(
                         self.id_field_transform(self._get_table(scope_info).c[scope_info['id_field']]).label('id'),
-                        self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']]).label('time')
+                        convert_time_value(self.time_field_transform(self._get_table(scope_info).c[scope_info['time_field']])).label('time')
                     ).select_from(self._limit_trajectory_ids(
                         self._get_table(scope_info), 
                         scope_info['id_field']
                     )) for scope_info in self.tables if 'source' in scope_info and scope_info.get('type') == 'event')
                 ).cte('all_times')
-            if issubclass(type(all_times.c.time.type), Date):
-                time_col = cast(all_times.c.time, DateTime)
-            else:
-                time_col = all_times.c.time
             try:
-                increment = cast(datetime.timedelta(seconds=1), Interval) if issubclass(type(time_col.type), DateTime) else 1
-                stmt = select(all_times.c.id, (func.max(time_col) + increment).label('maxtime')).group_by(all_times.c.id)
+                increment = cast(datetime.timedelta(seconds=1), Interval) if issubclass(type(all_times.c.time.type), DateTime) else 1
+                stmt = select(all_times.c.id, (func.max(all_times.c.time) + increment).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
             except Exception as e:
-                stmt = select(all_times.c.id, func.datetime_add(func.max(time_col), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
+                stmt = select(all_times.c.id, func.datetime_add(func.max(all_times.c.time), text('interval 1 second')).label('maxtime')).group_by(all_times.c.id)
                 result = self._execute_query(conn, stmt)
             result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
             return Attributes(result_df.set_index('id')['maxtime'])

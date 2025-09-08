@@ -121,10 +121,10 @@ export function duplicateQueryItem(
   }
 
   let queryNum = 2;
-  let queryName = `${path[0]} ${queryNum}`;
+  let queryName = `${path[0]}${queryNum}`;
   while (base[queryName]) {
     queryNum += 1;
-    queryName = `${path[0]} ${queryNum}`;
+    queryName = `${path[0]}${queryNum}`;
   }
   return {
     contents: { ...base, [queryName]: base[path[0]] },

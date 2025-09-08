@@ -10708,9 +10708,9 @@ function Yr(e, t = []) {
       queryPath: [t[0], ...r.queryPath]
     };
   }
-  let n = 2, l = `${t[0]} ${n}`;
+  let n = 2, l = `${t[0]}${n}`;
   for (; e[l]; )
-    n += 1, l = `${t[0]} ${n}`;
+    n += 1, l = `${t[0]}${n}`;
   return {
     contents: { ...e, [l]: e[t[0]] },
     queryPath: [l]
