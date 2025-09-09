@@ -2,9 +2,9 @@
 
 ## Quickstart
 
-You may first want to create a conda environment or other virtual environment to install packages in. Clone the repo, cd into it and run `pip install -e .`.
+You may first want to create a conda environment or other virtual environment to install packages in. Clone the repo, cd into it and run `pip install .`.
 
-In `demo.ipynb`, we show how to use the query language using MIMIC-IV in OMOP format. You can run that notebook to explore how TempoQL enables simple, readable and precise queries on EHR data.
+In `demo.ipynb`, we show how to use the query language using MIMIC-IV in OMOP format. You can run that notebook to explore how TempoQL enables simple, readable and precise queries on EHR data. We recommend installing JupyterLab (`pip install jupyterlab`), then running a JupyterLab instance (`jupyter lab`) in this repo directory, and opening and running `demo.ipynb`.
 
 ## Example Usage
 
