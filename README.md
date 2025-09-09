@@ -1,14 +1,14 @@
 # TempoQL: Standardized Temporal Queries for ML in Healthcare
 
-## Installation
+## Quickstart
 
 You may first want to create a conda environment or other virtual environment to install packages in. Clone the repo, cd into it and run `pip install -e .`.
 
-## Quickstart
+In `demo.ipynb`, we show how to use the query language using MIMIC-IV in OMOP format. You can run that notebook to explore how TempoQL enables simple, readable and precise queries on EHR data.
 
-You will need a dataset and a dataset specification to start using TempoQL. In `demo.ipynb`, we show how to use the query language using MIMIC-IV in OMOP format.
+## Example Usage
 
-Once you have a dataset and specification, running TempoQL looks like this:
+You will need a dataset and a dataset specification to start using TempoQL. Then, you can import TempoQL and use it in your Python code like this:
 
 ```python
 from tempo_ql import QueryEngine, GenericDataset, formats
