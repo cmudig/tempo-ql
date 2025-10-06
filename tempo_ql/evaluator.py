@@ -202,6 +202,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         self.value_placeholder = None
         self.index_value_placeholder = None
         self.variables = {}
+        self._data_element_cache = {}
         self._all_ids = None
         self._mintimes = None
         self._maxtimes = None
@@ -283,14 +284,20 @@ class EvaluateQuery(lark.visitors.Interpreter):
                     'value': pd.Series([], dtype=float)
                 }))
 
-        value = self.dataset.get_data_element(
+        cache_key = tuple(sorted(dict(
             scope=el_query.get("scope", (None, None))[1],
             data_type=requested_type,
             concept_id_query=el_query.get("id", None),
             concept_name_query=el_query.get("name", None),
-            value_field=el_query.get("value", (None, None))[1],
-            return_queries=self._logging_subqueries)
-        
+            value_field=el_query.get("value", (None, None))[1]).items()))
+        if cache_key in self._data_element_cache:
+            value = self._data_element_cache[cache_key]
+        else:
+            value = self.dataset.get_data_element(
+                **dict(cache_key),
+                return_queries=self._logging_subqueries)
+            self._data_element_cache[cache_key] = value
+                    
         if self._logging_subqueries:
             value, queries = value
         else:
