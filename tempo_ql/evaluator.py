@@ -117,7 +117,6 @@ UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
     | /(?!id|name|type|value|scope)[^};'"`]+/i -> data_element_query_basic
     
 PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
-DATA_NAME: /\{[^}]*\}/
 VAR_NAME: /(?!(and|or|not|case|when|else|in|then|every|at|from|to|with|as)\b)[A-Za-z][A-Za-z0-9_]*/ 
 
 NOW: "#NOW"i
