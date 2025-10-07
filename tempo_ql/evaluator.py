@@ -398,18 +398,30 @@ class EvaluateQuery(lark.visitors.Interpreter):
         return (start, end, new_index)
     
     def time_bounds_upper(self, tree):
+        all_ids = self.get_all_ids()
+        upper = self.visit(tree.children[1])
+        if is_datetime_or_timedelta(upper.get_values().dtype):
+            lower = Attributes(pd.to_datetime(pd.Series([pd.Timestamp.min] * len(all_ids), index=all_ids, name='min_times_placeholder')))
+        else:
+            lower = Attributes(pd.Series([-1e20] * len(all_ids), index=all_ids, name='min_times_placeholder'))
         start, end, new_index = self.time_bounds_both_ends(lark.Tree('time_bounds_both_ends', [lark.Token('', ''), 
-                                                                self.min_time(lark.Tree('', [])),
+                                                                lower,
                                                                 lark.Token('', ''),
-                                                                self.visit(tree.children[1])]))
-        return start, self._perform_binary_numpy_function([start, end], "max", np.maximum), new_index
+                                                                upper]))
+        return start, end, new_index
     
     def time_bounds_lower(self, tree):
+        all_ids = self.get_all_ids()
+        lower = self.visit(tree.children[1])
+        if is_datetime_or_timedelta(upper.get_values().dtype):
+            upper = Attributes(pd.to_datetime(pd.Series([pd.Timestamp.max] * len(all_ids), index=all_ids, name='min_times_placeholder')))
+        else:
+            upper = Attributes(pd.Series([1e20] * len(all_ids), index=all_ids, name='min_times_placeholder'))
         start, end, new_index = self.time_bounds_both_ends(lark.Tree('', [lark.Token('', ''),
-                                                                self.visit(tree.children[1]), 
+                                                                lower, 
                                                                 lark.Token('', ''),
-                                                                self.max_time(lark.Tree('', []))]))
-        return self._perform_binary_numpy_function([start, end], "min", np.minimum), end, new_index
+                                                                upper]))
+        return start, end, new_index
 
     def time_bounds_instant(self, tree):
         times = self.visit(tree.children[0])
@@ -807,6 +819,10 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 
         if tree.children[2] is not None:
             start_el, end_el, _ = self.visit(tree.children[2])
+            if pd.isna(start_el.get_values()).all():
+                start_el = self.min_time(lark.Tree('', []))
+            if pd.isna(end_el.get_values()).all():
+                end_el = self.max_time(lark.Tree('', []))
             start_time = self._make_time_index(start_el)
             end_time = self._make_time_index(end_el)
         else:
@@ -822,8 +838,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
             start_time = self.visit(tree.children[-1].children[0])
             end_time = self.visit(tree.children[-1].children[1])
         else:
-            start_time = self.min_time(lark.Tree('', []))
-            end_time = self.max_time(lark.Tree('', []))
+            all_ids = self.get_all_ids()
+            start_time = Attributes(pd.Series([np.nan] * len(all_ids), index=all_ids, name='min_times_placeholder'))
+            end_time = Attributes(pd.Series([np.nan] * len(all_ids), index=all_ids, name='max_times_placeholder'))
             
         if isinstance(start_time, Attributes) and isinstance(end_time, Attributes):
             pass

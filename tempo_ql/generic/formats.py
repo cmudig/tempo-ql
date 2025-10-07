@@ -26,7 +26,8 @@ def eicu(table_prefix='physionet-data.eicu_crd.'):
                 'Cumulative Dialysis': { 'value_field': 'dialysistotal'},
                 'Cumulative Net Fluid': { 'value_field': 'nettotal'},
             },
-            'scope': 'Fluids'
+            'scope': 'Fluids',
+            'comment': "The cumulative events here are denoted as such because they sum all previous intake, output, etc. over the admission. To get the incremental values, subtract each value from its last observation."
         },
         {
             'source': table_prefix + 'lab',
@@ -114,7 +115,8 @@ def eicu(table_prefix='physionet-data.eicu_crd.'):
                     'Hospital Discharge Status'
                 ]
             },
-            'scope': 'Patient'
+            'scope': 'Patient',
+            'comment': 'The admit offset for this dataset is always the time 0. All times are relative to the admission time.'
         },
         {
             'source': table_prefix + 'respiratorycare',
@@ -209,7 +211,8 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
             # all icu stay IDs will have diagnoses from all prior hospital admissions!
             'event_type': 'Diagnosis',
             'default_value_field': 'icd_code',
-            'scope': 'Diagnosis'
+            'scope': 'Diagnosis',
+            'comment': "Contains both ICD-9 and ICD-10 codes."
         },
         {
             'source': hosp_prefix + 'labevents',
@@ -218,7 +221,8 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
             'time_field': 'charttime',
             'concept_id_field': 'itemid',
             'default_value_field': 'value',
-            'scope': 'Lab'
+            'scope': 'Lab',
+            'comment': "If a lab test sometimes has string values returned, use value field 'valuenum' to specify that only numeric results should be returned."
         },
         {
             'source': hosp_prefix + 'microbiologyevents',
@@ -238,7 +242,8 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
                 'Anchor Age': { 'value_field': 'anchor_age' },
                 'Anchor Year': { 'value_field': 'anchor_year', 'value_transform': lambda x: cast(cast(x, String) + '-01-01', DateTime) },
                 'Date of Death': { 'value_field': 'dod' },
-            }
+            },
+            'comment': "All dates in the database have been shifted to protect patient confidentiality. Dates will be internally consistent for the same patient, but randomly distributed in the future. Dates of birth which occur in the present time are not true dates of birth. We can assume that the patient's age at the attribute value Anchor Year is the Anchor Age."
         },
         {
             'source': hosp_prefix + 'prescriptions',
@@ -248,7 +253,8 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
             'start_time_field': 'starttime',
             'end_time_field': 'stoptime',
             'default_value_field': 'dose_val_rx',
-            'scope': 'Medication'
+            'scope': 'Medication',
+            'comment': "The interval type is the name of the drug. Value field 'dose_unit_rx' represents the unit of the dose value; 'route' represents the way the drug is administered."
         },
         {
             'source': icu_prefix + 'chartevents',
@@ -257,7 +263,8 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
             'time_field': 'charttime',
             'concept_id_field': 'itemid',
             'default_value_field': 'value',
-            'scope': 'chartevents'
+            'scope': 'chartevents',
+            'comment': "If a chart event sometimes has string values returned, use value field 'valuenum' to specify that only numeric results should be returned."
         },
         {
             'source': icu_prefix + 'icustays',

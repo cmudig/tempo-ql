@@ -1541,9 +1541,9 @@ class TimeIndex(TimeSeriesQueryable):
         Events object"""
         event_times = events.df[[events.id_field, events.time_field]]
         mask = np.ones(len(event_times), dtype=bool)
-        if starts is not None:
+        if starts is not None and not pd.isna(starts.get_values()).all():
             mask &= event_times[events.time_field] >= make_aligned_value_series(events, starts)
-        if ends is not None:
+        if ends is not None and not pd.isna(ends.get_values()).all():
             mask &= event_times[events.time_field] < make_aligned_value_series(events, ends)
         # Don't deduplicate times, for consistency with other operations
         # mask &= ~event_times.duplicated([events.id_field, events.time_field])
