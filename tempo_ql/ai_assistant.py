@@ -139,6 +139,29 @@ Instruction: <INSTRUCTION>
 
         return base_prompt
     
+    def _create_sql_analysis_prompt(self, user_question: str, existing_query: Optional[str] = None) -> str:
+        """
+        Create a context-aware prompt for SQL query generation using MIMIC-IV database.
+        
+        Args:
+            user_question: The user's question/request
+            existing_query: Optional existing SQL query to modify
+            
+        Returns:
+            Formatted prompt for the AI model
+        """
+        with open(os.path.join(os.path.dirname(__file__), "..", "SQL_prompt.txt"), "r") as file:
+            base_prompt = file.read()
+        
+        # Add the user request to the prompt
+        prompt = base_prompt.replace("`user_request`", user_question)
+        
+        if existing_query is not None:
+            prompt += f"\n\nExisting query to modify:\n```sql\n{existing_query}\n```"
+            prompt += "\n\nPlease modify the existing query based on the new request."
+
+        return prompt
+    
     def _create_explain_prompt(self, query: str, query_error: Optional[str], table_context: str) -> str:
         """
         Create a prompt for explaining TempoQL queries.
@@ -272,6 +295,34 @@ Output:
         
         return None, text
     
+    def _extract_sql_query(self, text: str) -> Tuple[Optional[str], str]:
+        """
+        Extract SQL query from AI response.
+        
+        Args:
+            text: The AI response text
+            
+        Returns:
+            Tuple of (extracted SQL query or None, cleaned text)
+        """
+        if not text:
+            return None, text
+        
+        # Look for code blocks with sql language
+        sql_match = re.search(r'```sql\n?([\s\S]*?)```', text)
+        if sql_match:
+            return sql_match.group(1).strip(), re.sub(r'^' + re.escape(sql_match.group(0)) + r'[\r\n]+', '', text)
+        
+        # Fallback: look for any code block that might contain SQL
+        code_block_match = re.search(r'```(?:\w+)?\n?([\s\S]*?)```', text)
+        if code_block_match:
+            code = code_block_match.group(1).strip()
+            # Check if it looks like a SQL query (contains common SQL patterns)
+            if any(keyword in code.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'JOIN', 'GROUP BY', 'ORDER BY']):
+                return code, re.sub(r'^' + re.escape(code_block_match.group(0)) + r'[\r\n]+', '', text)
+        
+        return None, text
+    
     def _process_ai_response(self, response: str) -> Dict[str, Any]:
         """
         Process AI response to separate query and explanation.
@@ -367,6 +418,46 @@ Output:
                 return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
+    
+    def _call_gemini_api_sql(self, prompt: str, fast_model: bool = False) -> str:
+        """
+        Call the Gemini API for SQL generation without function calling.
+        
+        Args:
+            prompt: The prompt to send to the API
+            fast_model: Whether to use the fast model
+            
+        Returns:
+            The API response text
+            
+        Raises:
+            Exception: If the API call fails or the assistant is not available
+        """
+        if not self.is_available():
+            raise Exception("AI Assistant is not available. Please check your API key configuration.")
+        
+        try:
+            from google.genai import types
+            contents = [
+                types.Content(
+                    role="user", parts=[types.Part(text=prompt)]
+                )
+            ]
+            
+            # Use a simple config without function calling for SQL generation
+            simple_config = types.GenerateContentConfig()
+            
+            response = self.genai_client.models.generate_content(
+                model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-flash",
+                contents=contents,
+                config=simple_config
+            )
+            
+            return response.text
+            
+        except Exception as e:
+            traceback.print_exc()
+            raise Exception(f"Error calling Gemini API: {str(e)}")
         
     def validate_question(self, question: str, existing_query: Optional[str]) -> bool:
         prompt = self._make_query_validation_prompt(question, existing_query)
@@ -379,6 +470,138 @@ Output:
             raise ValueError("The question does not seem to involve TempoQL queries. I can only answer questions related to TempoQL.")
         
         return response == 'yes'
+    
+    def validate_sql_question(self, question: str, existing_query: Optional[str]) -> bool:
+        """
+        Validate if a question is suitable for SQL query generation.
+        
+        Args:
+            question: The user's question
+            existing_query: Optional existing SQL query
+            
+        Returns:
+            True if the question is valid for SQL generation
+        """
+        # Simple validation - check if question contains SQL-related keywords
+        sql_keywords = ['select', 'query', 'table', 'database', 'sql', 'query', 'data', 'patient', 'admission', 'lab', 'vital', 'diagnosis', 'procedure', 'medication', 'mimic']
+        question_lower = question.lower()
+        
+        # Check if question contains SQL-related terms or database concepts
+        has_sql_terms = any(keyword in question_lower for keyword in sql_keywords)
+        
+        # Check if it's asking for data extraction, analysis, or query generation
+        has_data_request = any(phrase in question_lower for phrase in [
+            'show me', 'get me', 'find', 'extract', 'list', 'count', 'average', 'sum', 'max', 'min',
+            'patients with', 'admissions', 'labs', 'vitals', 'diagnoses', 'procedures'
+        ])
+        
+        return has_sql_terms or has_data_request
+    
+    def _process_sql_ai_response(self, response: str) -> Dict[str, Any]:
+        """
+        Process AI response to separate SQL query and explanation.
+        
+        Args:
+            response: Raw AI response text
+            
+        Returns:
+            Dictionary with extracted_query, explanation, and has_query fields
+        """
+        extracted, cleaned = self._extract_sql_query(response)
+        return {
+            'extracted_query': extracted or '',
+            'explanation': cleaned,
+            'has_query': bool(extracted),
+            'raw_response': response
+        }
+        
+    def process_sql_question(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Process a user question and return a processed AI response for SQL query generation.
+        
+        Args:
+            question: The user's question
+            explain: Whether to explain the query or answer the question
+            query: A query to explain
+            query_error: An error to explain along with the query
+            
+        Returns:
+            Dictionary with processed AI response including extracted query and explanation
+        """
+        if not self.is_available():
+            return {
+                'extracted_query': None,
+                'explanation': "AI Assistant is not available. Please check your API key configuration.",
+                'has_query': False,
+                'raw_response': "AI Assistant is not available. Please check your API key configuration.",
+                'error': True
+            }
+        
+        try:
+            # Process based on the mode
+            if not explain:
+                assert question is not None, "question must be provided to run generation"
+                
+                # Validate the question for SQL generation
+                if not self.validate_sql_question(question, query):
+                    raise ValueError("The question does not seem to be suitable for SQL query generation. Please ask about data extraction, analysis, or database queries related to MIMIC-IV.")
+                
+                # Check if existing query is needed
+                needs_existing_query = query is not None and any(phrase in question.lower() for phrase in [
+                    'modify', 'update', 'change', 'edit', 'revise', 'instead of', 'instead'
+                ])
+                
+                print(f"🔍 Needs existing query for SQL generation: {needs_existing_query}")
+                
+                prompt = self._create_sql_analysis_prompt(question, existing_query=query if needs_existing_query else None)
+            else:
+                # For explain mode, check if the question contains a SQL query to explain
+                assert query is not None, "query must be provided to run explanation"
+                prompt = f"""
+Given the following SQL query, please explain what it does in simple terms that a non-technical person could understand. Focus on what data it extracts and what insights it provides.
+
+SQL Query:
+```sql
+{query}
+```
+
+Please provide a clear explanation of:
+1. What data this query extracts
+2. What tables it uses
+3. What the results show
+4. Any important assumptions or limitations
+"""
+            
+            # Call Gemini API (use SQL-specific method without function calling)
+            response = self._call_gemini_api_sql(prompt)
+            
+            print(response)
+            # Process the response based on mode
+            if explain:
+                # For explain mode, don't extract queries - just return the explanation
+                processed_response = {
+                    'extracted_query': None,
+                    'explanation': response,
+                    'has_query': False,
+                    'raw_response': response,
+                    'error': False
+                }
+            else:
+                # For generate mode, process normally to extract queries
+                processed_response = self._process_sql_ai_response(response)
+                processed_response['error'] = False
+            
+            return processed_response
+            
+        except Exception as e:
+            traceback.print_exc()
+            return {
+                'extracted_query': None,
+                'explanation': str(e),
+                'has_query': False,
+                'raw_response': f"Error processing question: {str(e)}",
+                'error': True
+            }
         
     def process_question(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None) -> Dict[str, Any]:
         """
