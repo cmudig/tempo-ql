@@ -790,15 +790,15 @@ class EvaluateQuery(lark.visitors.Interpreter):
         if not isinstance(num_bins, (float, int)) and int(num_bins) == num_bins:
             raise ValueError("Cut must either be followed by an integer bin count or a list of bin cutoffs")
         cut_type = tree.children[1].value
-        return CutOperator(int(num_bins), cut_type, names=tree.children[3] if len(tree.children) > 3 else None)
+        return CutOperator(int(num_bins), cut_type, names=self.visit(tree.children[2].children[-1]) if len(tree.children) > 2 else None)
     
     def manual_cut(self, tree):
         cut_type = tree.children[0].value
         bins = self.visit(tree.children[1])
-        return CutOperator(np.array(bins), cut_type, names=tree.children[3] if len(tree.children) > 3 else None)
+        return CutOperator(np.array(bins), cut_type, names=self.visit(tree.children[2].children[-1]) if len(tree.children) > 2 else None)
     
     def cut_clause(self, tree):
-        _, base_values, cut_op = tree.children
+        base_values, _, cut_op = tree.children
         return self.visit(cut_op).apply(self.visit(base_values))
         
 
