@@ -38,10 +38,10 @@ QUERIES = [
                             ce.itemid AS eventtype,
                             ce.value AS value
                         FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce
-                        INNER JOIN matching_eventids 
-                        ON ce.itemid = matching_eventids.itemid
                         INNER JOIN stays
                         ON ce.stay_id = stays.stay_id
+                        INNER JOIN matching_eventids 
+                        ON ce.itemid = matching_eventids.itemid
                         ORDER BY stay_id, time ASC
         """
     },
@@ -72,7 +72,7 @@ QUERIES = [
             SELECT DISTINCT d.itemid AS itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` d
             WHERE d.label = 'Platelet Count'
         )
-        SELECT
+        SELECT DISTINCT
             s.stay_id,
             le.charttime AS time,
             'Platelet Count' AS eventtype,
@@ -80,15 +80,16 @@ QUERIES = [
                 WHEN le.valuenum < 130 THEN 'Low'
                 WHEN le.valuenum BETWEEN 130 AND 400 THEN 'Normal'
                 ELSE 'High'
-            END AS value
+            END AS value,
+            le.valuenum AS value_
         FROM
             `physionet-data.mimiciv_3_1_hosp.labevents` AS le
         INNER JOIN
-            `matching_eventids` AS mei
-            ON le.itemid = mei.itemid
-        INNER JOIN
             `stays` AS s
             ON le.hadm_id = s.hadm_id AND le.subject_id = s.subject_id
+        INNER JOIN
+            `matching_eventids` AS mei
+            ON le.itemid = mei.itemid
         ORDER BY
             s.stay_id,
             le.charttime
@@ -100,15 +101,21 @@ QUERIES = [
         "sql": SQL_PREFIX + """, matching_eventids AS (
             SELECT DISTINCT d.itemid AS itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` d
             WHERE d.label = 'Non Invasive Blood Pressure mean'
+        ),
+        matching_events AS (
+            SELECT DISTINCT ce.stay_id AS stay_id,
+                ce.charttime AS charttime,
+                ce.value AS value
+            FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce
+            INNER JOIN matching_eventids 
+            ON ce.itemid = matching_eventids.itemid
         )
-        SELECT DISTINCT ce.stay_id AS stay_id, 
-                        MIN(ce.value) AS value
-                    FROM `physionet-data.mimiciv_3_1_icu.chartevents` ce
-                    INNER JOIN matching_eventids 
-                    ON ce.itemid = matching_eventids.itemid
-                    INNER JOIN stays
-                    ON ce.stay_id = stays.stay_id
-                    GROUP BY ce.stay_id
+        SELECT DISTINCT stays.stay_id AS stay_id, 
+                        MIN(matching_events.value) AS value
+                    FROM stays 
+                    LEFT JOIN matching_events
+                    ON matching_events.stay_id = stays.stay_id
+                    GROUP BY stays.stay_id
                     ORDER BY stay_id ASC
         """,
     },
@@ -118,8 +125,7 @@ QUERIES = [
         "sql": SQL_PREFIX + """, matching_eventids AS (
             SELECT DISTINCT d.itemid AS itemid FROM `physionet-data.mimiciv_3_1_hosp.d_labitems` d
             WHERE d.label = 'Lactate'
-        )
-        ,
+        ),
         DailyTimePoints AS (
             SELECT
                 swh.hadm_id,
@@ -134,7 +140,6 @@ QUERIES = [
                 )) AS generated_time
         ),
         LactateMeasurements AS (
-            -- Retrieve all valid lactate measurements from labevents.
             SELECT
                 le.hadm_id,
                 le.charttime,
@@ -144,9 +149,6 @@ QUERIES = [
             INNER JOIN
                 matching_eventids AS li
                 ON le.itemid = li.itemid
-            WHERE
-                le.valuenum IS NOT NULL
-                AND le.valuenum >= 0 -- Ensure numerical and non-negative values for averaging
         )
         SELECT DISTINCT
             dtp.stay_id,
@@ -157,10 +159,8 @@ QUERIES = [
         LEFT JOIN
             LactateMeasurements AS lm
             ON dtp.hadm_id = lm.hadm_id
-            -- Filter lactate measurements to fall within the specific 24-hour window
-            -- ending at 'time_point_end_window'.
-            AND CAST(lm.charttime AS TIMESTAMP) > TIMESTAMP_SUB(dtp.time_point_end_window, INTERVAL 24 HOUR)
-            AND CAST(lm.charttime AS TIMESTAMP) <= dtp.time_point_end_window
+            AND CAST(lm.charttime AS TIMESTAMP) >= TIMESTAMP_SUB(dtp.time_point_end_window, INTERVAL 24 HOUR)
+            AND CAST(lm.charttime AS TIMESTAMP) < dtp.time_point_end_window
         GROUP BY
             dtp.stay_id,
             dtp.time_point_end_window
@@ -171,7 +171,7 @@ QUERIES = [
     },
     {
         "name": "Aggregation in Overlapping Intervals",
-        "tempoql": "min {Non Invasive Blood Pressure mean; scope = chartevents} from #now - 8 h to #now every 4 h",
+        "tempoql": "min {Non Invasive Blood Pressure mean; scope = chartevents} from #now - 8 h to #now every 4 h from {Admit Time} to {Discharge Time}",
         "sql": SQL_PREFIX + """, matching_eventids AS (
                 SELECT DISTINCT d.itemid AS itemid FROM `physionet-data.mimiciv_3_1_icu.d_items` d
                 WHERE d.label = 'Non Invasive Blood Pressure mean'
@@ -197,9 +197,6 @@ QUERIES = [
             INNER JOIN
                 `matching_eventids` AS mei
                 ON ce.itemid = mei.itemid
-            WHERE
-                ce.valuenum IS NOT NULL
-                AND ce.valuenum >= 0
         )
         SELECT DISTINCT
             gtp.stay_id,
@@ -210,8 +207,8 @@ QUERIES = [
         LEFT JOIN
             MBP_Measurements AS mbp
             ON gtp.stay_id = mbp.stay_id
-            AND CAST(mbp.charttime AS TIMESTAMP) > TIMESTAMP_SUB(gtp.time_point_end_window, INTERVAL 8 HOUR)
-            AND CAST(mbp.charttime AS TIMESTAMP) <= gtp.time_point_end_window
+            AND CAST(mbp.charttime AS TIMESTAMP) >= TIMESTAMP_SUB(gtp.time_point_end_window, INTERVAL 8 HOUR)
+            AND CAST(mbp.charttime AS TIMESTAMP) < gtp.time_point_end_window
         GROUP BY
             gtp.stay_id,
             gtp.time_point_end_window
@@ -228,18 +225,22 @@ QUERIES = [
                 WHERE d.label = 'Invasive Ventilation'
             ),
             VentilationEvents AS (
-                SELECT
+                SELECT DISTINCT
                     ce.stay_id,
-                    ce.starttime
+                    ce.starttime,
+                    ce.endtime,
+                    ce.itemid,
+                    ce.value
                 FROM
                     `physionet-data.mimiciv_3_1_icu.procedureevents` AS ce
                 INNER JOIN
+                    `stays`
+                    ON ce.stay_id = stays.stay_id
+                INNER JOIN
                     `matching_eventids` AS mei
                     ON ce.itemid = mei.itemid
-                WHERE
-                    ce.stay_id IN (SELECT stay_id FROM `stays`)
             )
-            SELECT DISTINCT
+            SELECT
                 ve.stay_id,
                 ve.starttime AS time,
                 CASE
@@ -266,17 +267,19 @@ QUERIES = [
             WHERE label = 'Cardioversion/Defibrillation'
         ),
         HeartRhythmEvents AS (
-            SELECT
+            SELECT DISTINCT
                 ce.stay_id,
-                ce.charttime
+                ce.charttime,
+                ce.itemid,
+                ce.value
             FROM
                 `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
             INNER JOIN
-                HeartRhythmItemIDs AS hri
-                ON ce.itemid = hri.itemid
-            INNER JOIN
                 stays AS s
                 ON ce.stay_id = s.stay_id
+            INNER JOIN
+                HeartRhythmItemIDs AS hri
+                ON ce.itemid = hri.itemid
         ),
         CardioDefibProcedures AS (
             SELECT
@@ -285,13 +288,13 @@ QUERIES = [
             FROM
                 `physionet-data.mimiciv_3_1_icu.procedureevents` AS ce
             INNER JOIN
-                CardioDefibItemIDs AS cdi
-                ON ce.itemid = cdi.itemid
-            INNER JOIN
                 stays AS s
                 ON ce.stay_id = s.stay_id
+            INNER JOIN
+                CardioDefibItemIDs AS cdi
+                ON ce.itemid = cdi.itemid
         )
-        SELECT DISTINCT
+        SELECT
             hre.stay_id,
             hre.charttime AS time,
             COUNT(cdp.procedure_charttime) AS value
@@ -304,7 +307,8 @@ QUERIES = [
                                         AND TIMESTAMP_ADD(CAST(hre.charttime AS TIMESTAMP), INTERVAL 24 HOUR)
         GROUP BY
             hre.stay_id,
-            hre.charttime
+            hre.charttime,
+            hre.value -- this is needed because we want a row for EVERY event instance
         ORDER BY
             hre.stay_id,
             hre.charttime
@@ -326,11 +330,11 @@ QUERIES = [
             FROM
                 `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
             INNER JOIN
-                `matching_eventids` AS mei
-                ON ce.itemid = mei.itemid
-            INNER JOIN
                 `stays` AS s
                 ON ce.stay_id = s.stay_id
+            INNER JOIN
+                `matching_eventids` AS mei
+                ON ce.itemid = mei.itemid
             WHERE
                 ce.valuenum IS NOT NULL
         )
@@ -366,15 +370,13 @@ QUERIES = [
             INNER JOIN
                 `matching_eventids` AS mei
                 ON ce.itemid = mei.itemid
-            WHERE
-                ce.valuenum IS NOT NULL
         ),
         GeneratedTimePoints AS (
             SELECT
                 s.stay_id,
                 generated_time AS time_point_end_window
             FROM
-                `stays` AS s, -- Assumed user-provided table, a subset of `physionet-data.mimiciv_3_1_icu.icustays`
+                `stays` AS s,
                 UNNEST(GENERATE_TIMESTAMP_ARRAY(
                     CAST(s.intime AS TIMESTAMP),
                     CAST(s.outtime AS TIMESTAMP),
@@ -389,11 +391,11 @@ QUERIES = [
             FROM
                 `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
             INNER JOIN
-                `matching_eventids` AS mei
-                ON ce.itemid = mei.itemid
-            INNER JOIN
                 `stays` AS s
                 ON ce.stay_id = s.stay_id
+            INNER JOIN
+                `matching_eventids` AS mei
+                ON ce.itemid = mei.itemid
             WHERE
                 ce.valuenum IS NOT NULL
         )
@@ -447,11 +449,11 @@ QUERIES = [
             FROM
                 `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
             INNER JOIN
-                `matching_eventids` AS mei
-                ON ce.itemid = mei.itemid
-            INNER JOIN
                 `stays` AS s
                 ON ce.stay_id = s.stay_id
+            INNER JOIN
+                `matching_eventids` AS mei
+                ON ce.itemid = mei.itemid
             WHERE
                 ce.value IS NOT NULL
         ),
