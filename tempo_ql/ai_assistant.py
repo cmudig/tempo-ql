@@ -150,7 +150,7 @@ Instruction: <INSTRUCTION>
         Returns:
             Formatted prompt for the AI model
         """
-        with open(os.path.join(os.path.dirname(__file__), "..", "SQL_prompt.txt"), "r") as file:
+        with open(os.path.join(os.path.dirname(__file__), "SQL_prompt.txt"), "r") as file:
             base_prompt = file.read()
         
         # Add the user request to the prompt
@@ -413,7 +413,6 @@ Output:
                     responses.append(response.text)
                     return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
             else:
-                print("Plain text")
                 responses.append(response.text)
                 return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
             num_calls += 1
@@ -546,14 +545,7 @@ Output:
                 if not self.validate_sql_question(question, query):
                     raise ValueError("The question does not seem to be suitable for SQL query generation. Please ask about data extraction, analysis, or database queries related to MIMIC-IV.")
                 
-                # Check if existing query is needed
-                needs_existing_query = query is not None and any(phrase in question.lower() for phrase in [
-                    'modify', 'update', 'change', 'edit', 'revise', 'instead of', 'instead'
-                ])
-                
-                print(f"🔍 Needs existing query for SQL generation: {needs_existing_query}")
-                
-                prompt = self._create_sql_analysis_prompt(question, existing_query=query if needs_existing_query else None)
+                prompt = self._create_sql_analysis_prompt(question)
             else:
                 # For explain mode, check if the question contains a SQL query to explain
                 assert query is not None, "query must be provided to run explanation"
@@ -575,7 +567,6 @@ Please provide a clear explanation of:
             # Call Gemini API (use SQL-specific method without function calling)
             response = self._call_gemini_api_sql(prompt)
             
-            print(response)
             # Process the response based on mode
             if explain:
                 # For explain mode, don't extract queries - just return the explanation
@@ -644,7 +635,6 @@ Please provide a clear explanation of:
             # Call Gemini API
             response = self._call_gemini_api(prompt)
             
-            print(response)
             # Process the response based on mode
             if explain:
                 # For explain mode, don't extract queries - just return the explanation

@@ -212,7 +212,7 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
             'event_type': 'Diagnosis',
             'default_value_field': 'icd_code',
             'scope': 'Diagnosis',
-            'comment': "Contains both ICD-9 and ICD-10 codes."
+            'comment': "The name of the event is always 'Diagnosis' and the value contains either an ICD-9 or ICD-10 code."
         },
         {
             'source': hosp_prefix + 'labevents',
