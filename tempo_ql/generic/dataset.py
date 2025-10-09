@@ -166,9 +166,12 @@ class GenericDataset:
             return o
             
         return json.dumps([
-            sanitize({k: v for k, v in table.items() if k not in ("id_field", "start_time_field", "end_time_field", "time_field")})
+            sanitize({
+                **table,
+                **({"join": self.id_field_joins[table['source']]} if 'source' in table and table['source'] in self.id_field_joins else {})
+            })
             for table in self.tables
-        ])
+        ], indent=2)
         
     def get_scopes(self):
         return sorted(set([table_info['scope'] for table_info in self.tables

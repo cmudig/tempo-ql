@@ -49,10 +49,24 @@ Below are some examples of aggregation expressions and what they do:
 - `first time({Extubation; scope = Procedure}) after time({Intubation; scope = Procedure})` - returns a value for every intubation event, where the value is the time of the next extubation event.
 
 The following additional features are available in TempoQL:
-- String and regex operations (contains - any match within the string, startswith - match at the beginning, endswith - match at the end, matches - full string match), e.g. `{Heart Rhythm} contains /fibrillation/i`
+- String and regex operations:
+    - <data> contains <pattern|string> = returns the same length as <data> where each element is true if the data string matches the <pattern> at any location
+    - <data> startswith <pattern> - same as contains, but must match at the beginning of the data string
+    - <data> endswith <pattern> - same as contains, but must match at the end of the data string
+    - <data> matches <pattern> - same as contains, but must match the entire string from beginning to end (more restrictive)
+    - Example: `{Heart Rhythm} contains /fibrillation/i
 - Filtering: `{Temperature Celsius} where #value < 50`
-- Carrying forward values in case of missingness: `mean {Glucose; scope = Lab} from #now - 8 hours to #now carry 12 hours every 4 hours`
+- Carrying forward values in case of missingness (by either duration or steps): `mean {Glucose; scope = Lab} from #now - 8 hours to #now carry 12 hours every 4 hours`
 - Imputing missing values: `mean {Hemoglobin; scope = Lab} before #now impute mean every 3 days`
+- Converting durations: `<expr> as <unit>` converts the given expr to a unit of duration, such as seconds, minutes, hours, days, or years
+- Checking whether values are null: `<expr> exists` and `<expr> does not exist` test for null values
+- Discretizing values: The `cut` command discretizes values. For example:
+    - `<expr> cut 3 bins`: discretize into three bins using a histogram method
+    - `<expr> cut 5 quantiles`: discretize into five bins using a quantile method
+    - `<expr> cut bins [-inf, -1, 1, inf]`: discretize into three bins, where the middle bin is bounded by -1 and 1 and the outer bins are open-ended.
+    - `<expr> cut quantiles [0, 0.5, 0.7, 1]`: discretize into bins selected by quantile ranges
+    - Add the keyword `named` followed by a list of N - 1 strings to name the bins. Example: `<expr> cut 3 bins named ['Low', 'Medium', 'High]`
+
 
 You can use the following functions to transform values:
 - time(<Events>): returns a new Events series where the values are the times of each row.
