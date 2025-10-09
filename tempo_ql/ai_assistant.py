@@ -150,7 +150,7 @@ Instruction: <INSTRUCTION>
         Returns:
             Formatted prompt for the AI model
         """
-        with open(os.path.join(os.path.dirname(__file__), "..", "SQL_prompt.txt"), "r") as file:
+        with open(os.path.join(os.path.dirname(__file__), "SQL_prompt.txt"), "r") as file:
             base_prompt = file.read()
         
         # Add the user request to the prompt
