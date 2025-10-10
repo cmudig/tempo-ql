@@ -9,7 +9,7 @@ authors = [
 ]
 description = "Toolkit and interactive widget for querying time-series healthcare data"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 keywords = ["AI", "machine learning", "healthcare", "EHR", "OMOP", "MEDS", "data science"]
 license = { file = "LICENSE" }
 classifiers = [
