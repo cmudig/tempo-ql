@@ -3,6 +3,7 @@ import re
 from typing import Optional, Dict, Any, List, Tuple
 import json
 import traceback
+import time
 from tempo_ql.generic.dataset import ConceptFilter
 
 search_concepts_function = {
@@ -368,7 +369,7 @@ Output:
         while num_calls < max_num_calls:
             try:
                 response = self.genai_client.models.generate_content(
-                    model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-flash",
+                    model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-pro",
                     contents=contents,
                     config=self.fast_config if fast_model else self.config
                 )
@@ -377,8 +378,10 @@ Output:
                 raise Exception(f"Error calling Gemini API: {str(e)}")
             
             if response.candidates[0].content.parts and any(p.function_call is not None for p in response.candidates[0].content.parts):
-                function_call = next(p.function_call for p in response.candidates[0].content.parts if p.function_call is not None)
-                if function_call.name == "search_concepts":
+                contents.append(response.candidates[0].content)
+                for p in response.candidates[0].content.parts:
+                    if p.function_call is None or p.function_call.name != "search_concepts": continue
+                    function_call = p.function_call    
                     try:
                         args = function_call.args
                         query_filter = self.query_engine.parse_data_element_query(args["query"])
@@ -400,18 +403,15 @@ Output:
                             name=function_call.name,
                             response={"result": function_response},
                         )
-                        contents.append(response.candidates[0].content)
                         contents.append(types.Content(role="user", parts=[function_response]))
-                        if response.text is not None:
-                            responses.append(response.text)
-                        responses.append('(Searching concepts...)')
 
                     except Exception as e:
                         traceback.print_exc()
                         raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
-                else:
+                    
+                if response.text is not None:
                     responses.append(response.text)
-                    return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
+                responses.append('(Searching concepts...)')
             else:
                 responses.append(response.text)
                 return re.sub('\n{2,}', '\n\n', '\n\n'.join([r for r in responses if r]))
@@ -447,7 +447,7 @@ Output:
             simple_config = types.GenerateContentConfig()
             
             response = self.genai_client.models.generate_content(
-                model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-flash",
+                model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-pro",
                 contents=contents,
                 config=simple_config
             )
@@ -634,6 +634,10 @@ Please provide a clear explanation of:
             
             # Call Gemini API
             response = self._call_gemini_api(prompt)
+            while not response.strip():
+                print("Received empty response, retrying in 5s...")
+                time.sleep(5)
+                response = self._call_gemini_api(prompt)
             
             # Process the response based on mode
             if explain:

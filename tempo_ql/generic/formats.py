@@ -220,9 +220,9 @@ def mimiciv(hosp_prefix='physionet-data.mimiciv_3_1_hosp.', icu_prefix='physione
             'id_field': 'stay_id',
             'time_field': 'charttime',
             'concept_id_field': 'itemid',
-            'default_value_field': 'value',
+            'default_value_field': 'valuenum',
             'scope': 'Lab',
-            'comment': "If a lab test sometimes has string values returned, use value field 'valuenum' to specify that only numeric results should be returned."
+            'comment': "If a lab test has string values, use value field 'value' to return the strings. By default only numeric values are returned."
         },
         {
             'source': hosp_prefix + 'microbiologyevents',

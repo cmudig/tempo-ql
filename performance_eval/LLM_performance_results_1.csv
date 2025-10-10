@@ -1,0 +1,4464 @@
+query_name,iteration,method,result,error,query
+Attributes,1,TempoQL,valid,,{Anchor Age} + (({Admit Time} - {Anchor Year}) as years)
+Attributes,1,SQL,valid,,"SELECT
+  icu.stay_id,
+  pat.anchor_age + DATETIME_DIFF(icu.intime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) AS age
+FROM
+  `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+  `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+  ON icu.subject_id = pat.subject_id"
+Events,1,TempoQL,valid,,"{
+  scope = chartevents;
+  name in (
+    ""Respiratory Rate"",
+    ""Respiratory Rate (spontaneous)"",
+    ""Respiratory Rate (Total)"",
+    ""Respiratory Rate (Set)""
+  )
+}"
+Events,1,SQL,invalid,,"WITH rr_items AS (
+  SELECT
+    itemid
+  FROM
+    `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    itemid IN (
+      220210, -- Respiratory Rate
+      224688, -- Respiratory Rate (Set)
+      224689, -- Respiratory Rate (spontaneous)
+      224690  -- Respiratory Rate (total)
+    )
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  ce.valueuom,
+  ce.valuenum
+FROM
+  `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN
+  rr_items
+  ON ce.itemid = rr_items.itemid"
+String Operations,1,TempoQL,valid,,{Diagnosis; scope = Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,1,SQL,valid,,"-- The user has requested to identify diagnoses related to ""diabetes""
+-- using a list of ICD code prefixes that correspond to hypertension.
+-- This query implements the request as specified, using the provided codes.
+WITH icd AS (
+  SELECT
+    icu.stay_id,
+    icu.outtime,
+    dx.icd_code,
+    dx.icd_version,
+    d_dx.long_title
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+    ON icu.hadm_id = dx.hadm_id
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx
+    ON dx.icd_code = d_dx.icd_code AND dx.icd_version = d_dx.icd_version
+)
+SELECT
+  icd.stay_id,
+  icd.outtime AS timestamp,
+  icd.icd_code,
+  icd.icd_version,
+  icd.long_title,
+  REGEXP_CONTAINS(icd.icd_code, r'^(401|402|403|404|405|I10|I11|I12|I13|I15)') AS is_related_diagnosis
+FROM icd"
+Discretizing Observations,1,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,1,SQL,valid,,"-- Extract all Platelet Count observations from lab results for ICU patients,
+-- discretizing the numeric value into 'Low', 'Normal', or 'High' categories.
+WITH platelet_labs AS (
+  SELECT
+    subject_id,
+    hadm_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_hosp.labevents`
+  WHERE
+    itemid = 51265 -- Platelet Count
+)
+SELECT
+  icu.stay_id,
+  pl.charttime,
+  CASE
+    WHEN pl.valuenum < 130 THEN 'Low'
+    WHEN pl.valuenum >= 400 THEN 'High'
+    WHEN pl.valuenum IS NOT NULL THEN 'Normal'
+    ELSE NULL
+  END AS platelet_level
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN platelet_labs AS pl
+  ON icu.subject_id = pl.subject_id AND icu.hadm_id = pl.hadm_id
+WHERE
+  pl.charttime >= icu.intime AND pl.charttime < icu.outtime"
+Patient-Level Aggregation,1,TempoQL,valid,,min {Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime
+Patient-Level Aggregation,1,SQL,invalid,,"-- Finds the first recorded instance of the minimum Non-Invasive Blood Pressure mean for each patient
+-- across all of their ICU stays.
+SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum AS min_non_invasive_blood_pressure_mean
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS i
+INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    ON i.stay_id = ce.stay_id
+WHERE
+    ce.itemid = 220181 -- Non Invasive Blood Pressure mean
+QUALIFY ROW_NUMBER() OVER (PARTITION BY i.subject_id ORDER BY ce.valuenum ASC, ce.charttime ASC) = 1"
+Daily Aggregation,1,TempoQL,valid,,"(mean {Lactate; scope = Lab} from #now - 24 hours to #now)
+  every 1 day from {Admit Time} to {Discharge Time}"
+Daily Aggregation,1,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [22:9]
+
+Location: US
+Job ID: c28cc401-1405-4a25-8cc3-ae4080cf6199
+","WITH stays AS (
+    -- First, get all ICU stays and their corresponding hospital admission windows
+    SELECT
+        icu.stay_id,
+        adm.hadm_id,
+        icu.intime,
+        adm.dischtime,
+        adm.admittime
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+        ON icu.subject_id = adm.subject_id AND icu.hadm_id = adm.hadm_id
+),
+
+daily_grid AS (
+    -- For each stay, generate a timestamp for each day of the admission, starting from the day after ICU admission.
+    -- These timestamps will be the points at which we calculate the preceding 24-hour average.
+    SELECT
+        s.stay_id,
+        day_timestamp
+    FROM stays AS s
+    CROSS JOIN UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+            TIMESTAMP_ADD(TIMESTAMP_TRUNC(s.intime, DAY), INTERVAL 1 DAY),
+            TIMESTAMP(s.dischtime),
+            INTERVAL 1 DAY
+        )
+    ) AS day_timestamp
+),
+
+lactate_measurements AS (
+    -- Combine all lactate measurements from both chartevents and labevents
+    -- Lactate from chartevents (ICU)
+    SELECT
+        stay_id,
+        charttime,
+        valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 225668 -- Lactate
+        AND valuenum IS NOT NULL
+
+    UNION ALL
+
+    -- Lactate from labevents (hospital)
+    SELECT
+        s.stay_id,
+        l.charttime,
+        l.valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS l
+    INNER JOIN stays AS s
+        ON l.hadm_id = s.hadm_id
+    WHERE
+        l.itemid = 50813 -- Lactate
+        AND l.valuenum IS NOT NULL
+        -- Pre-filter labevents to the hospital admission window for efficiency
+        AND l.charttime >= s.admittime AND l.charttime < s.dischtime
+)
+
+-- Left join the daily timestamps with lactate measurements from the preceding 24 hours and calculate the average
+SELECT
+    dg.stay_id,
+    dg.day_timestamp,
+    AVG(lm.valuenum) AS avg_lactate_past_24hr
+FROM daily_grid AS dg
+LEFT JOIN lactate_measurements AS lm
+    ON dg.stay_id = lm.stay_id
+    -- The measurement must be within the 24-hour window preceding the daily timestamp
+    AND lm.charttime >= TIMESTAMP_SUB(dg.day_timestamp, INTERVAL 24 HOUR)
+    AND lm.charttime < dg.day_timestamp
+GROUP BY
+    dg.stay_id,
+    dg.day_timestamp
+ORDER BY
+    dg.stay_id,
+    dg.day_timestamp;"
+Aggregation in Overlapping Intervals,1,TempoQL,valid,,"(min {scope = chartevents; id in (220181, 220052)} from #now - 8 hours to #now)
+  every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,1,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [22:7]
+
+Location: US
+Job ID: 3ce8568c-1326-424c-b1f7-40e252691ebc
+","WITH
+  mbp_events AS (
+    SELECT
+      stay_id,
+      charttime,
+      valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid IN (
+        220052, -- Arterial Blood Pressure mean
+        220181, -- Non Invasive Blood Pressure mean
+        225312  -- ART BP mean
+      )
+      AND valuenum IS NOT NULL AND valuenum > 0 AND valuenum < 300
+  ),
+  time_grid AS (
+    SELECT
+      stay_id,
+      grid_time
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(
+      GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)
+    ) AS grid_time
+  )
+SELECT
+  tg.stay_id,
+  tg.grid_time AS charttime,
+  MIN(mbp.valuenum) AS min_mbp_preceding_8hr
+FROM time_grid AS tg
+LEFT JOIN mbp_events AS mbp
+  ON
+    tg.stay_id = mbp.stay_id
+    AND mbp.charttime > TIMESTAMP_SUB(tg.grid_time, INTERVAL 8 HOUR)
+    AND mbp.charttime <= tg.grid_time
+GROUP BY
+  tg.stay_id,
+  tg.grid_time
+ORDER BY
+  tg.stay_id,
+  tg.grid_time"
+Aggregating Existence at Event Times,1,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} before #now)
+  at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,1,SQL,valid,,"-- Identifies all invasive ventilation events from procedureevents and flags
+-- if a given event was preceded by another ventilation event in the same ICU stay.
+-- The 'procedures table' is interpreted as 'icu.procedureevents' which contains
+-- timed procedural data for ICU patients.
+WITH ranked_ventilation AS (
+    SELECT
+        stay_id,
+        starttime,
+        ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY starttime) AS vent_rank
+    FROM `physionet-data.mimiciv_3_1_icu.procedureevents`
+    WHERE
+        itemid = 225792 -- Invasive Ventilation
+)
+SELECT
+    stay_id,
+    starttime,
+    (vent_rank > 1) AS has_previous_ventilation
+FROM ranked_ventilation
+ORDER BY
+    stay_id,
+    starttime"
+Rolling Difference,1,TempoQL,valid,,({Temperature Fahrenheit; scope = chartevents} - (mean {Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now)) at every {Temperature Fahrenheit; scope = chartevents}
+Rolling Difference,1,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type DATETIME at [15:5]
+
+Location: US
+Job ID: 2d124901-84a5-4a6b-8181-cc2f4dddaa45
+","-- Calculate the difference between each Temperature Fahrenheit measurement and the patient's average temperature over the preceding 8 hours.
+WITH temperature AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE itemid = 223761 -- Temperature Fahrenheit
+)
+SELECT
+  stay_id,
+  charttime,
+  valuenum - AVG(valuenum) OVER (
+    PARTITION BY stay_id
+    ORDER BY
+      charttime
+    RANGE BETWEEN INTERVAL 8 HOUR PRECEDING
+    AND INTERVAL 1 MICROSECOND PRECEDING
+  ) AS value
+FROM temperature"
+Imputing Missing Values,1,TempoQL,valid,,(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now impute mean) every 4 hours from {Admit Time} to {Discharge Time}
+Imputing Missing Values,1,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [25:23]
+
+Location: US
+Job ID: a9df600f-b1a6-4305-99d4-ac22d280b1ef
+","WITH
+  temperature_measurements AS (
+    SELECT
+      ce.stay_id,
+      ce.charttime,
+      ce.valuenum
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS ie
+    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+      ON ie.stay_id = ce.stay_id
+    WHERE
+      ce.itemid = 223761 -- Temperature Fahrenheit
+      AND ce.valuenum IS NOT NULL
+      AND ce.charttime >= ie.intime AND ce.charttime < ie.outtime
+  ),
+  global_avg_temp AS (
+    SELECT
+      AVG(valuenum) AS overall_avg_temp
+    FROM temperature_measurements
+  ),
+  time_grid AS (
+    SELECT
+      stay_id,
+      window_time
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS window_time
+  )
+SELECT
+  tg.stay_id,
+  tg.window_time AS charttime,
+  COALESCE(
+    AVG(tm.valuenum),
+    (SELECT overall_avg_temp FROM global_avg_temp)
+  ) AS temperature_fahrenheit
+FROM time_grid AS tg
+LEFT JOIN temperature_measurements AS tm
+  ON tg.stay_id = tm.stay_id
+  AND tm.charttime >= TIMESTAMP_SUB(tg.window_time, INTERVAL 4 HOUR)
+  AND tm.charttime < tg.window_time
+GROUP BY
+  tg.stay_id,
+  tg.window_time
+ORDER BY
+  tg.stay_id,
+  tg.window_time"
+Carrying Values Forward,1,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+) carry 2 days every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,1,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [19:5]
+
+Location: US
+Job ID: 75f60ef2-3c0c-442f-b100-e7fb6eaa5ba3
+","WITH o2_device_events AS (
+  SELECT
+    stay_id,
+    charttime,
+    value
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223834 -- O2 Delivery Device(s)
+    AND value IS NOT NULL
+    AND value != ''
+),
+
+time_grid AS (
+  SELECT
+    s.stay_id,
+    end_of_window
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS s
+  CROSS JOIN UNNEST(
+    GENERATE_TIMESTAMP_ARRAY(
+      TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR),
+      s.outtime,
+      INTERVAL 24 HOUR
+    )
+  ) AS end_of_window
+),
+
+direct_observations AS (
+  SELECT
+    tg.stay_id,
+    tg.end_of_window,
+    o2.value,
+    o2.charttime
+  FROM time_grid AS tg
+  LEFT JOIN o2_device_events AS o2
+    ON tg.stay_id = o2.stay_id
+    AND o2.charttime >= TIMESTAMP_SUB(tg.end_of_window, INTERVAL 24 HOUR)
+    AND o2.charttime < tg.end_of_window
+  QUALIFY
+    ROW_NUMBER()
+      OVER (PARTITION BY tg.stay_id, tg.end_of_window ORDER BY o2.charttime ASC)
+    = 1
+),
+
+carry_forward_values AS (
+  SELECT
+    stay_id,
+    end_of_window,
+    value AS value_in_window,
+    LAST_VALUE(value IGNORE NULLS) OVER (
+      PARTITION BY stay_id
+      ORDER BY end_of_window
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS last_value,
+    LAST_VALUE(charttime IGNORE NULLS) OVER (
+      PARTITION BY stay_id
+      ORDER BY end_of_window
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS last_value_time
+  FROM direct_observations
+)
+
+SELECT
+  stay_id,
+  end_of_window AS charttime,
+  CASE
+    WHEN value_in_window IS NOT NULL
+      THEN value_in_window
+    WHEN
+      last_value_time IS NOT NULL
+      AND TIMESTAMP_DIFF(end_of_window, last_value_time, HOUR) <= 48
+      THEN last_value
+    ELSE NULL
+  END AS o2_delivery_device
+FROM carry_forward_values
+ORDER BY
+  stay_id,
+  charttime;"
+Attributes,2,TempoQL,valid,,{Anchor Age} + ({Admit Time} - {Anchor Year}) as years
+Attributes,2,SQL,valid,,"SELECT
+    icu.stay_id,
+    DATETIME_DIFF(icu.intime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) + pat.anchor_age AS age
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+    ON icu.subject_id = pat.subject_id"
+Events,2,TempoQL,valid,,{scope = chartevents; name contains /respiratory rate/i}
+Events,2,SQL,invalid,,"-- Identifies and extracts all respiratory rate measurements from chartevents.
+-- This includes the patient's observed rate as well as ventilator set, spontaneous, and total rates.
+WITH rr_items AS (
+  SELECT
+    itemid
+  FROM
+    `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label IN (
+      'Respiratory Rate',
+      'Respiratory Rate (Set)',
+      'Respiratory Rate (spontaneous)',
+      'Respiratory Rate (Total)'
+    )
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  ce.itemid,
+  ce.valueuom,
+  ce.valuenum AS value
+FROM
+  `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN
+  rr_items
+  ON ce.itemid = rr_items.itemid"
+String Operations,2,TempoQL,valid,,{Diagnosis; scope = Diagnosis} matches /^(401|402|403|404|405|I10|I11|I12|I13|I15).*/
+String Operations,2,SQL,valid,,"SELECT
+    icu.stay_id,
+    icu.outtime AS charttime,
+    dx.icd_code,
+    dx.icd_version,
+    REGEXP_CONTAINS(dx.icd_code, r'^(401|402|403|404|405|I10|I11|I12|I13|I15)') AS is_diabetes_related
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+    ON icu.hadm_id = dx.hadm_id"
+Discretizing Observations,2,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,2,SQL,valid,,"WITH lab_platelets AS (
+  SELECT
+    le.subject_id,
+    le.hadm_id,
+    le.charttime,
+    le.valuenum
+  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli
+    ON le.itemid = dli.itemid
+  WHERE
+    dli.label = 'Platelet Count'
+)
+SELECT
+  icu.stay_id,
+  lp.charttime,
+  CASE
+    WHEN lp.valuenum < 130 THEN 'Low'
+    WHEN lp.valuenum >= 400 THEN 'High'
+    WHEN lp.valuenum IS NOT NULL THEN 'Normal'
+    ELSE NULL
+  END AS value
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN lab_platelets AS lp
+  ON icu.subject_id = lp.subject_id AND icu.hadm_id = lp.hadm_id
+WHERE
+  lp.charttime >= icu.intime AND lp.charttime < icu.outtime"
+Patient-Level Aggregation,2,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","min({
+  name = 'Non Invasive Blood Pressure mean';
+  scope = chartevents;
+  value = valuenum
+} from #mintime to #maxtime)"
+Patient-Level Aggregation,2,SQL,invalid,,"-- Finds the minimum Non-Invasive Blood Pressure (Mean) for each patient
+-- across all of their ICU stays. If a patient has multiple measurements
+-- with the same minimum value, the one with the earliest charttime is chosen.
+SELECT
+    icu.stay_id,
+    ce.charttime,
+    ce.valuenum
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    ON icu.stay_id = ce.stay_id
+WHERE
+    ce.itemid = 220181 -- Non Invasive Blood Pressure mean
+    AND ce.valuenum IS NOT NULL
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY icu.subject_id
+    ORDER BY ce.valuenum ASC, ce.charttime ASC
+) = 1"
+Daily Aggregation,2,TempoQL,valid,,(mean {Lactate; scope = Lab} from #now - 24 hours to #now) every 1 day from {Admit Time} to {Discharge Time}
+Daily Aggregation,2,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [30:9]
+
+Location: US
+Job ID: bd23d676-9d02-411d-b431-93e545c950aa
+","WITH
+  icu_admissions AS (
+    SELECT
+      i.stay_id,
+      i.intime,
+      a.dischtime
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS i
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS a
+      ON i.subject_id = a.subject_id AND i.hadm_id = a.hadm_id
+  ),
+  lactate_events AS (
+    SELECT
+      i.stay_id,
+      l.charttime,
+      l.valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS l
+    INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS i
+      ON l.subject_id = i.subject_id AND l.hadm_id = i.hadm_id
+    WHERE
+      l.itemid = 50813
+      AND l.valuenum IS NOT NULL
+  ),
+  daily_series AS (
+    SELECT
+      stay_id,
+      day_timestamp
+    FROM icu_admissions
+    CROSS JOIN
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(intime, dischtime, INTERVAL 24 HOUR)
+      ) AS day_timestamp
+  )
+SELECT
+  ds.stay_id,
+  ds.day_timestamp,
+  AVG(le.valuenum) AS avg_lactate_past_24hr
+FROM daily_series AS ds
+LEFT JOIN lactate_events AS le
+  ON
+    ds.stay_id = le.stay_id
+    AND le.charttime >= TIMESTAMP_SUB(ds.day_timestamp, INTERVAL 24 HOUR)
+    AND le.charttime < ds.day_timestamp
+GROUP BY
+  ds.stay_id,
+  ds.day_timestamp
+ORDER BY
+  ds.stay_id,
+  ds.day_timestamp"
+Aggregation in Overlapping Intervals,2,TempoQL,valid,,"(
+  min {
+    name in (""Non Invasive Blood Pressure mean"", ""Arterial Blood Pressure mean"");
+    scope = chartevents
+  }
+  from #now - 8 hours to #now
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,2,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [12:16]
+
+Location: US
+Job ID: ce34dcc6-ced1-4657-b0a1-f3490123b28e
+","-- For each ICU stay, generate a 4-hour time series from admission to discharge.
+-- For each time point in the series, find the minimum mean blood pressure (MBP)
+-- recorded in the preceding 8-hour window.
+WITH time_grid AS (
+    -- Generate a 4-hour spaced time series for the duration of each ICU stay
+    SELECT
+        icu.stay_id,
+        series_time
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    CROSS JOIN
+        UNNEST(GENERATE_TIMESTAMP_ARRAY(icu.intime, icu.outtime, INTERVAL 4 HOUR)) AS series_time
+),
+mbp_events AS (
+    -- Select all mean blood pressure measurements from chartevents
+    SELECT
+        stay_id,
+        charttime,
+        valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid IN (
+            220052, -- Arterial Blood Pressure mean
+            220181, -- Non Invasive Blood Pressure mean
+            225312  -- ART BP mean
+        )
+        AND valuenum IS NOT NULL
+)
+-- Left join the time grid with MBP measurements to find the minimum value in the preceding 8 hours
+SELECT
+    tg.stay_id,
+    tg.series_time,
+    MIN(mbp.valuenum) AS min_mbp_preceding_8h
+FROM
+    time_grid AS tg
+LEFT JOIN
+    mbp_events AS mbp
+    ON
+        tg.stay_id = mbp.stay_id
+        AND mbp.charttime >= TIMESTAMP_SUB(tg.series_time, INTERVAL 8 HOUR)
+        AND mbp.charttime <= tg.series_time
+GROUP BY
+    tg.stay_id,
+    tg.series_time
+ORDER BY
+    tg.stay_id,
+    tg.series_time"
+Aggregating Existence at Event Times,2,TempoQL,valid,,"(exists {name = 'Invasive Ventilation'; scope = procedureevents} before #now)
+at every start({name = 'Invasive Ventilation'; scope = procedureevents})"
+Aggregating Existence at Event Times,2,SQL,valid,,"WITH ranked_ventilation AS (
+    SELECT
+        stay_id,
+        starttime,
+        ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY starttime) AS rn
+    FROM `physionet-data.mimiciv_3_1_icu.procedureevents`
+    WHERE
+        itemid = 225792 -- Invasive Ventilation
+        AND starttime IS NOT NULL
+)
+SELECT
+    stay_id,
+    starttime,
+    (rn > 1) AS had_previous_invasive_ventilation
+FROM ranked_ventilation
+ORDER BY
+    stay_id,
+    starttime"
+Rolling Difference,2,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",{Temperature Fahrenheit; scope = chartevents} - (mean({Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now))
+Rolling Difference,2,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type DATETIME at [10:13]
+
+Location: US
+Job ID: 91b19f01-16d5-4cea-8d14-92e1f2243837
+","-- Retrieve every Temperature Fahrenheit measurement and calculate its difference
+-- from the patient's average temperature over the preceding 8-hour window.
+WITH temp_with_avg AS (
+    SELECT
+        stay_id,
+        charttime,
+        valuenum,
+        AVG(valuenum) OVER (
+            PARTITION BY stay_id
+            ORDER BY charttime
+            RANGE BETWEEN INTERVAL 8 HOUR PRECEDING AND CURRENT ROW
+        ) AS avg_temp_last_8h
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 223761 -- Temperature Fahrenheit
+        AND valuenum IS NOT NULL
+)
+SELECT
+    stay_id,
+    charttime,
+    valuenum - avg_temp_last_8h AS temp_diff_from_8h_avg
+FROM
+    temp_with_avg
+ORDER BY
+    stay_id,
+    charttime;"
+Imputing Missing Values,2,TempoQL,valid,,(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now impute mean) every 4 hours from {Admit Time} to {Discharge Time}
+Imputing Missing Values,2,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [30:23]
+
+Location: US
+Job ID: cfec1710-48a3-4731-b0f5-619b374512fa
+","WITH temperature_items AS (
+  SELECT
+    itemid
+  FROM `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label = 'Temperature Fahrenheit' AND linksto = 'chartevents'
+), temp_events AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (
+      SELECT
+        itemid
+      FROM temperature_items
+    )
+    AND valuenum IS NOT NULL
+), global_avg_temp AS (
+  SELECT
+    AVG(valuenum) AS global_mean
+  FROM temp_events
+), time_grid AS (
+  SELECT
+    stay_id,
+    time_bucket
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS time_bucket
+), binned_temps AS (
+  SELECT
+    tg.stay_id,
+    tg.time_bucket,
+    AVG(te.valuenum) AS avg_temp_fahrenheit
+  FROM time_grid AS tg
+  LEFT JOIN temp_events AS te
+    ON tg.stay_id = te.stay_id
+    AND te.charttime >= TIMESTAMP_SUB(tg.time_bucket, INTERVAL 4 HOUR)
+    AND te.charttime < tg.time_bucket
+  GROUP BY
+    tg.stay_id,
+    tg.time_bucket
+)
+SELECT
+  bt.stay_id,
+  bt.time_bucket,
+  COALESCE(bt.avg_temp_fahrenheit, g.global_mean) AS temperature_fahrenheit
+FROM binned_temps AS bt
+CROSS JOIN global_avg_temp AS g
+ORDER BY
+  bt.stay_id,
+  bt.time_bucket"
+Carrying Values Forward,2,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+  carry 2 days
+) every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,2,SQL,error,"Reason: 400 No matching signature for operator >= for argument types: DATETIME, TIMESTAMP
+  Signature: T1 >= T1
+    Unable to find common supertype for templated argument <T1>
+      Input types for <T1>: {TIMESTAMP, DATETIME} at [48:11]
+
+Location: US
+Job ID: e6e5e7db-dfd7-4167-b3bb-9ed0c120d5ea
+","WITH
+  o2_device_item AS (
+    SELECT
+      itemid
+    FROM
+      `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+      label = 'O2 Delivery Device(s)' AND linksto = 'chartevents'
+  ),
+  o2_device_events AS (
+    SELECT
+      ce.stay_id,
+      ce.charttime,
+      ce.value
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    INNER JOIN
+      o2_device_item
+      ON ce.itemid = o2_device_item.itemid
+    WHERE
+      ce.value IS NOT NULL
+      AND ce.value != ''
+  ),
+  time_series AS (
+    SELECT
+      stay_id,
+      series_time
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          TIMESTAMP(intime), TIMESTAMP(outtime), INTERVAL 24 HOUR
+        )
+      ) AS series_time
+  ),
+  raw_values AS (
+    SELECT
+      ts.stay_id,
+      ts.series_time,
+      o2.value,
+      o2.charttime
+    FROM
+      time_series AS ts
+    LEFT JOIN
+      o2_device_events AS o2
+      ON ts.stay_id = o2.stay_id
+      AND o2.charttime >= TIMESTAMP_SUB(ts.series_time, INTERVAL 24 HOUR)
+      AND o2.charttime < ts.series_time
+    QUALIFY
+      ROW_NUMBER() OVER (PARTITION BY ts.stay_id, ts.series_time ORDER BY o2.charttime ASC) = 1
+  ),
+  filled_values AS (
+    SELECT
+      stay_id,
+      series_time,
+      COALESCE(
+        value,
+        LAST_VALUE(value IGNORE NULLS) OVER (PARTITION BY stay_id ORDER BY series_time)
+      ) AS filled_value,
+      COALESCE(
+        charttime,
+        LAST_VALUE(charttime IGNORE NULLS) OVER (PARTITION BY stay_id ORDER BY series_time)
+      ) AS obs_time
+    FROM
+      raw_values
+  )
+SELECT
+  stay_id,
+  series_time,
+  CASE
+    WHEN
+      TIMESTAMP_DIFF(series_time, obs_time, DAY) <= 2
+      THEN filled_value
+    ELSE
+      NULL
+  END AS o2_delivery_device
+FROM
+  filled_values
+ORDER BY
+  stay_id,
+  series_time"
+Attributes,3,TempoQL,valid,,{Anchor Age} + ({Admit Time} - {Anchor Year}) as years
+Attributes,3,SQL,valid,,"SELECT
+    icu.stay_id,
+    pat.anchor_age + EXTRACT(YEAR FROM icu.intime) - pat.anchor_year AS age_at_icu_admission
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+    ON icu.subject_id = pat.subject_id"
+Events,3,TempoQL,valid,,"{scope = chartevents; name in (""Respiratory Rate"", ""Respiratory Rate (spontaneous)"", ""Respiratory Rate (Total)"", ""Respiratory Rate (Set)"")}"
+Events,3,SQL,invalid,,"-- Extracts all respiratory rate measurements from chartevents.
+-- Respiratory rate is charted as breaths per minute.
+WITH respiratory_rate_items AS (
+  SELECT
+    itemid,
+    label
+  FROM
+    `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    itemid IN (
+      220210, -- Respiratory Rate
+      224422, -- Spontaneous Resp Rate
+      224688, -- Respiratory Rate (Set)
+      224689, -- Respiratory Rate (spontaneous)
+      224690, -- Respiratory Rate (total)
+      226781, -- Resp Rate (Total)
+      227063, -- Manual Resp Rate
+      227064, -- Spont Resp Rate
+      227066 -- Total Resp Rate
+    )
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  rri.label,
+  ce.valueuom,
+  ce.valuenum
+FROM
+  `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN
+  respiratory_rate_items AS rri
+  ON ce.itemid = rri.itemid"
+String Operations,3,TempoQL,valid,,{Diagnosis; scope = Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,3,SQL,valid,,"-- Fetches all diagnoses for ICU patients and adds a boolean flag
+-- to indicate if the diagnosis is related to hypertension,
+-- based on a user-provided list of ICD codes which they labelled as 'diabetes'.
+-- The ICU stay discharge time is used as the timestamp for each diagnosis.
+WITH diagnosis_events AS (
+  SELECT
+    icu.stay_id,
+    icu.outtime,
+    dx.icd_code,
+    dx.icd_version,
+    dx.seq_num
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+    ON icu.hadm_id = dx.hadm_id
+)
+SELECT
+  de.stay_id,
+  de.outtime AS timestamp,
+  de.icd_code,
+  de.icd_version,
+  (
+    STARTS_WITH(de.icd_code, '401')
+    OR STARTS_WITH(de.icd_code, '402')
+    OR STARTS_WITH(de.icd_code, '403')
+    OR STARTS_WITH(de.icd_code, '404')
+    OR STARTS_WITH(de.icd_code, '405')
+    OR STARTS_WITH(de.icd_code, 'I10')
+    OR STARTS_WITH(de.icd_code, 'I11')
+    OR STARTS_WITH(de.icd_code, 'I12')
+    OR STARTS_WITH(de.icd_code, 'I13')
+    OR STARTS_WITH(de.icd_code, 'I15')
+  ) AS is_diabetes_related
+FROM diagnosis_events AS de
+ORDER BY
+  de.stay_id,
+  de.seq_num"
+Discretizing Observations,3,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,3,SQL,valid,,"WITH platelet_events AS (
+    SELECT
+        le.subject_id,
+        le.hadm_id,
+        le.charttime,
+        le.valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+    INNER JOIN
+        `physionet-data.mimiciv_3_1_hosp.d_labitems` AS dli
+        ON le.itemid = dli.itemid
+    WHERE
+        dli.label = 'Platelet Count'
+)
+SELECT
+    icu.stay_id,
+    pe.charttime,
+    CASE
+        WHEN pe.valuenum < 130 THEN 'Low'
+        WHEN pe.valuenum >= 400 THEN 'High'
+        WHEN pe.valuenum IS NOT NULL THEN 'Normal'
+    END AS value
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    platelet_events AS pe
+    ON icu.subject_id = pe.subject_id AND icu.hadm_id = pe.hadm_id
+WHERE
+    pe.charttime >= icu.intime AND pe.charttime < icu.outtime"
+Patient-Level Aggregation,3,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",min({Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime)
+Patient-Level Aggregation,3,SQL,invalid,,"WITH
+  nibp_mean_item AS (
+    SELECT
+      itemid
+    FROM
+      `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+      label = 'Non Invasive Blood Pressure mean'
+  ),
+  patient_min_nibp AS (
+    SELECT
+      icu.subject_id,
+      MIN(ce.valuenum) AS min_value
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    INNER JOIN
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+      ON ce.stay_id = icu.stay_id
+    WHERE
+      ce.itemid IN (
+        SELECT itemid FROM nibp_mean_item
+      )
+    GROUP BY
+      icu.subject_id
+  )
+SELECT
+  icu.stay_id,
+  pmn.min_value AS min_patient_nibp_mean
+FROM
+  `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+  patient_min_nibp AS pmn
+  ON icu.subject_id = pmn.subject_id
+ORDER BY
+  icu.subject_id,
+  icu.stay_id"
+Daily Aggregation,3,TempoQL,valid,,"(mean {Lactate; scope = Lab} from #now - 24 hours to #now)
+  every 1 day from {Admit Time} to {Discharge Time}"
+Daily Aggregation,3,SQL,error,"Reason: 400 Syntax error: Expected "")"" but got ""("" at [12:89]
+
+Location: US
+Job ID: 7bf74dfd-69a6-47b6-86b5-e81a894b1e79
+","-- Get the average lactate value in the 24 hours preceding each day of an ICU patient's hospital stay.
+-- The time series starts at ICU admission and extends to hospital discharge.
+WITH
+  -- 1. Create a daily series of timestamps for each ICU stay, spanning from ICU admission to hospital discharge.
+  date_series AS (
+    SELECT
+      icu.stay_id,
+      ts.day_marker
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+      ON icu.subject_id = adm.subject_id AND icu.hadm_id = adm.hadm_id,
+      UNNEST(GENERATE_TIMESTAMP_ARRAY(icu.intime, adm.dischtime, INTERVAL 1 DAY)) AS ts (day_marker)
+  ),
+  -- 2. Identify all lactate measurements and associate them with an ICU stay.
+  lactate_events AS (
+    SELECT
+      icu.stay_id,
+      lab.charttime,
+      lab.valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS lab
+    INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+      ON lab.subject_id = icu.subject_id AND lab.hadm_id = icu.hadm_id
+    WHERE
+      lab.itemid = 50813 -- Lactate
+      AND lab.valuenum IS NOT NULL
+  )
+-- 3. For each daily timestamp, calculate the average lactate from the preceding 24 hours.
+SELECT
+  ds.stay_id,
+  ds.day_marker AS timestamp,
+  AVG(le.valuenum) AS avg_lactate_past_24hr
+FROM date_series AS ds
+LEFT JOIN lactate_events AS le
+  ON ds.stay_id = le.stay_id
+  AND le.charttime >= TIMESTAMP_SUB(ds.day_marker, INTERVAL 24 HOUR)
+  AND le.charttime < ds.day_marker
+GROUP BY
+  ds.stay_id,
+  ds.day_marker
+ORDER BY
+  ds.stay_id,
+  ds.day_marker"
+Aggregation in Overlapping Intervals,3,TempoQL,valid,,"(min {
+  name in (""Arterial Blood Pressure mean"", ""Non Invasive Blood Pressure mean"");
+  scope = chartevents
+} from #now - 8 hours to #now)
+every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,3,SQL,valid,,"-- Finds the minimum mean blood pressure in the 8 hours preceding each 4-hour interval of an ICU stay.
+WITH mbp_events AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (
+      220052, -- Arterial Blood Pressure mean
+      220181, -- Non Invasive Blood Pressure mean
+      225312  -- ART BP mean
+    )
+    AND valuenum IS NOT NULL
+),
+time_grid AS (
+  SELECT
+    stay_id,
+    time_bucket
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN UNNEST(
+    GENERATE_TIMESTAMP_ARRAY(
+      CAST(intime AS TIMESTAMP),
+      CAST(outtime AS TIMESTAMP),
+      INTERVAL 4 HOUR
+    )
+  ) AS time_bucket
+)
+SELECT
+  tg.stay_id,
+  tg.time_bucket AS charttime,
+  MIN(mbp.valuenum) AS min_mbp_preceding_8hr
+FROM time_grid AS tg
+LEFT JOIN mbp_events AS mbp
+  ON tg.stay_id = mbp.stay_id
+  AND CAST(mbp.charttime AS TIMESTAMP) >= TIMESTAMP_SUB(tg.time_bucket, INTERVAL 8 HOUR)
+  AND CAST(mbp.charttime AS TIMESTAMP) <= tg.time_bucket
+GROUP BY
+  tg.stay_id,
+  tg.time_bucket
+ORDER BY
+  tg.stay_id,
+  tg.time_bucket"
+Aggregating Existence at Event Times,3,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} before #now)
+    at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,3,SQL,error,"Reason: 400 Analytic function cannot be an argument of another analytic function at [21:5]
+
+Location: US
+Job ID: ca196fdb-3147-4a59-b609-5faebb7f2765
+","-- Identifies the start of every distinct invasive ventilation event for an ICU stay.
+-- An invasive ventilation event is defined by the charting of 'Invasive Vent' for the
+-- 'O2 Delivery Device(s)' item (itemid 226732).
+-- A new event is considered to start if there is a gap of more than 2 hours
+-- since the last 'Invasive Vent' charting for the same stay.
+WITH invasive_vent_charts AS (
+  SELECT
+    stay_id,
+    charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 226732 -- O2 Delivery Device(s)
+    AND value = 'Invasive Vent'
+),
+event_groups AS (
+  SELECT
+    stay_id,
+    charttime,
+    -- A new ventilation event is identified by a gap of > 2 hours from the previous chart time.
+    -- We create a group identifier for each continuous event period.
+    SUM(
+      CASE
+        WHEN DATETIME_DIFF(
+          charttime,
+          LAG(charttime, 1) OVER (PARTITION BY stay_id ORDER BY charttime),
+          HOUR
+        ) > 2
+          THEN 1
+        ELSE 0
+      END
+    ) OVER (PARTITION BY stay_id ORDER BY charttime) AS event_group
+  FROM invasive_vent_charts
+),
+event_starts AS (
+  -- For each ventilation event group, find the earliest chart time, which marks the start.
+  SELECT
+    stay_id,
+    MIN(charttime) AS event_starttime
+  FROM event_groups
+  GROUP BY
+    stay_id,
+    event_group
+)
+-- Rank the ventilation events chronologically for each stay to determine if a previous event exists.
+SELECT
+  stay_id,
+  event_starttime,
+  CASE
+    WHEN ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY event_starttime) > 1
+      THEN TRUE
+    ELSE FALSE
+  END AS had_previous_event
+FROM event_starts
+ORDER BY
+  stay_id,
+  event_starttime"
+Rolling Difference,3,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",{Temperature Fahrenheit; scope = chartevents} - (mean({Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now))
+Rolling Difference,3,SQL,error,"Reason: 400 Window framing expression must be a literal or parameter at [11:21]
+
+Location: US
+Job ID: e5ebe0de-4485-4d37-86e2-7994fd418cdb
+","WITH temp_fahrenheit AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum,
+    AVG(valuenum) OVER (
+      PARTITION BY
+        stay_id
+      ORDER BY
+        UNIX_SECONDS(CAST(charttime AS TIMESTAMP))
+      RANGE BETWEEN 8 * 3600 PRECEDING AND 1 PRECEDING
+    ) AS avg_temp_last_8h
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223761 -- Temperature Fahrenheit
+    AND valuenum IS NOT NULL
+)
+SELECT
+  stay_id,
+  charttime,
+  tf.valuenum - tf.avg_temp_last_8h AS temperature_difference
+FROM
+  temp_fahrenheit AS tf
+ORDER BY
+  stay_id,
+  charttime"
+Imputing Missing Values,3,TempoQL,valid,,(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now) impute mean every 4 hours from {Admit Time} to {Discharge Time}
+Imputing Missing Values,3,SQL,error,"Reason: 400 Syntax error: Expected "")"" but got ""("" at [32:14]
+
+Location: US
+Job ID: 5bc28a9d-4498-4d23-ab37-449fe31d7511
+","WITH
+  temperature_events AS (
+    SELECT
+      stay_id,
+      CAST(charttime AS TIMESTAMP) AS charttime,
+      valuenum
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 223761 -- Temperature Fahrenheit
+      AND valuenum IS NOT NULL
+  ),
+  global_mean_temp AS (
+    SELECT
+      AVG(valuenum) AS global_avg
+    FROM
+      temperature_events
+  ),
+  time_grid AS (
+    SELECT
+      icu.stay_id,
+      ts.chart_hour
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    CROSS JOIN
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          TIMESTAMP_ADD(CAST(icu.intime AS TIMESTAMP), INTERVAL 4 HOUR),
+          CAST(icu.outtime AS TIMESTAMP),
+          INTERVAL 4 HOUR
+        )
+      ) AS ts(chart_hour)
+  ),
+  windowed_avg_temp AS (
+    SELECT
+      grid.stay_id,
+      grid.chart_hour,
+      AVG(temp.valuenum) AS avg_temp_4hr
+    FROM
+      time_grid AS grid
+    LEFT JOIN
+      temperature_events AS temp
+      ON grid.stay_id = temp.stay_id
+      AND temp.charttime >= TIMESTAMP_SUB(grid.chart_hour, INTERVAL 4 HOUR)
+      AND temp.charttime < grid.chart_hour
+    GROUP BY
+      grid.stay_id,
+      grid.chart_hour
+  )
+SELECT
+  w.stay_id,
+  w.chart_hour,
+  COALESCE(w.avg_temp_4hr, g.global_avg) AS temperature_fahrenheit
+FROM
+  windowed_avg_temp AS w
+  CROSS JOIN global_mean_temp AS g
+ORDER BY
+  w.stay_id,
+  w.chart_hour"
+Carrying Values Forward,3,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,3,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [9:9]
+
+Location: US
+Job ID: 095e398f-967e-42f8-a343-9eb0eb8a1938
+","WITH time_buckets AS (
+    -- Generate a time series of 24-hour intervals for each ICU stay.
+    -- Each timestamp represents the end of a 24-hour observation window.
+    SELECT
+        icu.stay_id,
+        bucket_time
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    CROSS JOIN UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+            TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR),
+            icu.outtime,
+            INTERVAL 24 HOUR
+        )
+    ) AS bucket_time
+),
+o2_delivery_events AS (
+    -- Get all O2 delivery device events
+    SELECT
+        stay_id,
+        charttime,
+        value
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 223834 -- O2 Delivery Device(s)
+),
+o2_in_buckets AS (
+    -- For each 24h bucket, find the EARLIEST O2 device value in the preceding 24 hours.
+    SELECT
+        tb.stay_id,
+        tb.bucket_time,
+        (
+            ARRAY_AGG(ce.value ORDER BY ce.charttime ASC LIMIT 1)
+        )[OFFSET(0)] AS o2_device
+    FROM time_buckets AS tb
+    LEFT JOIN o2_delivery_events AS ce
+        ON tb.stay_id = ce.stay_id
+        -- The event must be within the 24-hour window ending at the bucket_time
+        AND ce.charttime >= TIMESTAMP_SUB(tb.bucket_time, INTERVAL 24 HOUR)
+        AND ce.charttime < tb.bucket_time
+    GROUP BY
+        tb.stay_id,
+        tb.bucket_time
+),
+carry_forward_setup AS (
+    -- Set up for carrying forward values by creating groups.
+    -- A new group starts each time a non-null o2_device value appears.
+    SELECT
+        stay_id,
+        bucket_time,
+        o2_device,
+        COUNT(o2_device) OVER (PARTITION BY stay_id ORDER BY bucket_time) AS value_group
+    FROM o2_in_buckets
+)
+SELECT
+    cfs.stay_id,
+    cfs.bucket_time AS charttime,
+    -- Carry the last observed value forward, but only if the observation is not more than 2 days old.
+    CASE
+        WHEN
+            TIMESTAMP_DIFF(
+                cfs.bucket_time,
+                -- Find the timestamp of the bucket where the value being carried forward was first observed.
+                FIRST_VALUE(
+                    CASE WHEN cfs.o2_device IS NOT NULL THEN cfs.bucket_time END IGNORE NULLS
+                ) OVER (PARTITION BY cfs.stay_id, cfs.value_group ORDER BY cfs.bucket_time),
+                DAY
+            ) <= 2
+            THEN
+                -- If the last observation is within the 2-day carry-forward window, use it.
+                FIRST_VALUE(cfs.o2_device IGNORE NULLS)
+                    OVER (PARTITION BY cfs.stay_id, cfs.value_group ORDER BY cfs.bucket_time)
+        ELSE NULL -- Otherwise, the value is NULL.
+    END AS value
+FROM carry_forward_setup AS cfs
+ORDER BY
+    cfs.stay_id,
+    cfs.bucket_time;"
+Attributes,4,TempoQL,valid,,{Anchor Age} + (({Admit Time} - {Anchor Year}) as years)
+Attributes,4,SQL,valid,,"-- Calculate patient age at the time of ICU admission.
+-- Age is calculated as: anchor_age + (year of ICU admission - anchor_year)
+SELECT
+    icu.stay_id,
+    icu.intime,
+    p.anchor_age + EXTRACT(YEAR FROM icu.intime) - p.anchor_year AS age
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS p
+    ON icu.subject_id = p.subject_id"
+Events,4,TempoQL,valid,,"{scope = chartevents; name in (""Respiratory Rate"", ""Respiratory Rate (spontaneous)"", ""Respiratory Rate (Total)"", ""Respiratory Rate (Set)"")}"
+Events,4,SQL,invalid,,"-- Extracts all respiratory rate measurements from chartevents
+-- The itemids are:
+-- 220210: Respiratory Rate
+-- 224688: Respiratory Rate (Set)
+-- 224689: Respiratory Rate (spontaneous)
+-- 224690: Respiratory Rate (total)
+SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum
+FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+WHERE
+    ce.itemid IN (220210, 224688, 224689, 224690)"
+String Operations,4,TempoQL,valid,,{Diagnosis; scope = Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,4,SQL,valid,,"-- The user request specified ""diabetes"" but provided ICD codes for hypertension.
+-- This query assumes the ICD codes are the ground truth and identifies hypertension-related diagnoses.
+WITH icu_diagnoses AS (
+    SELECT
+        icu.stay_id,
+        icu.outtime,
+        dx.icd_code,
+        dx.icd_version
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN
+        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+        ON icu.hadm_id = dx.hadm_id
+)
+
+SELECT
+    id.stay_id,
+    id.outtime AS charttime,
+    id.icd_code,
+    id.icd_version,
+    d.long_title,
+    CASE
+        WHEN id.icd_version = 9 AND (
+            STARTS_WITH(id.icd_code, '401')
+            OR STARTS_WITH(id.icd_code, '402')
+            OR STARTS_WITH(id.icd_code, '403')
+            OR STARTS_WITH(id.icd_code, '404')
+            OR STARTS_WITH(id.icd_code, '405')
+        )
+            THEN TRUE
+        WHEN id.icd_version = 10 AND (
+            STARTS_WITH(id.icd_code, 'I10')
+            OR STARTS_WITH(id.icd_code, 'I11')
+            OR STARTS_WITH(id.icd_code, 'I12')
+            OR STARTS_WITH(id.icd_code, 'I13')
+            OR STARTS_WITH(id.icd_code, 'I15')
+        )
+            THEN TRUE
+        ELSE FALSE
+    END AS is_hypertension_related
+FROM
+    icu_diagnoses AS id
+LEFT JOIN
+    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d
+    ON id.icd_code = d.icd_code AND id.icd_version = d.icd_version"
+Discretizing Observations,4,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,4,SQL,invalid,,"-- Extracts all platelet count lab observations for ICU patients,
+-- discretizing the numeric value into 'Low', 'Normal', or 'High' categories.
+WITH lab_events AS (
+  SELECT
+    icu.stay_id,
+    le.charttime,
+    le.valuenum
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+    ON icu.subject_id = le.subject_id AND icu.hadm_id = le.hadm_id
+  -- 51265 is the itemid for Platelet Count
+  WHERE
+    le.itemid = 51265
+    AND le.charttime >= icu.intime AND le.charttime < icu.outtime
+)
+SELECT
+  stay_id,
+  charttime,
+  CASE
+    WHEN valuenum < 130 THEN 'Low'
+    WHEN valuenum >= 400 THEN 'High'
+    ELSE 'Normal'
+  END AS value
+FROM lab_events"
+Patient-Level Aggregation,4,TempoQL,valid,,min {Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime
+Patient-Level Aggregation,4,SQL,invalid,,"WITH nibp_events AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  WHERE
+    ce.itemid = 220181 -- Non Invasive Blood Pressure mean
+    AND ce.valuenum IS NOT NULL
+)
+SELECT
+  ne.stay_id,
+  ne.charttime,
+  ne.valuenum
+FROM nibp_events AS ne
+INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  ON ne.stay_id = icu.stay_id
+QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY ne.valuenum ASC, ne.charttime ASC) = 1"
+Daily Aggregation,4,TempoQL,valid,,"(mean {Lactate; scope = Lab} from #now - 24 hours to #now)
+  every 1 day from {Admit Time} to {Discharge Time}"
+Daily Aggregation,4,SQL,invalid,,"WITH
+icu_stay_windows AS (
+    SELECT
+        ie.stay_id,
+        ie.intime,
+        adm.dischtime
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS ie
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+        ON ie.subject_id = adm.subject_id AND ie.hadm_id = adm.hadm_id
+),
+daily_grid AS (
+    SELECT
+        stay_id,
+        day_timestamp
+    FROM icu_stay_windows,
+    UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+            TIMESTAMP(icu_stay_windows.intime),
+            TIMESTAMP(icu_stay_windows.dischtime),
+            INTERVAL 1 DAY
+        )
+    ) AS day_timestamp
+),
+lactate_measurements AS (
+    SELECT
+        stay_id,
+        TIMESTAMP(charttime) AS charttime,
+        valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE itemid = 225668
+
+    UNION ALL
+
+    SELECT
+        ie.stay_id,
+        TIMESTAMP(le.charttime) AS charttime,
+        le.valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+    INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS ie
+        ON le.subject_id = ie.subject_id AND le.hadm_id = ie.hadm_id
+    WHERE le.itemid = 50813
+)
+SELECT
+    dg.stay_id,
+    dg.day_timestamp,
+    AVG(lm.valuenum) AS avg_lactate_preceding_24h
+FROM daily_grid AS dg
+LEFT JOIN lactate_measurements AS lm
+    ON dg.stay_id = lm.stay_id
+    AND lm.charttime >= TIMESTAMP_SUB(dg.day_timestamp, INTERVAL 24 HOUR)
+    AND lm.charttime < dg.day_timestamp
+GROUP BY
+    dg.stay_id,
+    dg.day_timestamp
+ORDER BY
+    dg.stay_id,
+    dg.day_timestamp"
+Aggregation in Overlapping Intervals,4,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","(min({
+  name in ('Arterial Blood Pressure mean', 'Non Invasive Blood Pressure mean');
+  scope = chartevents
+} from #now - 8 hours to #now)) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,4,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [20:21]
+
+Location: US
+Job ID: ccf286a0-31e5-4d1b-aee6-7a323fbf59c9
+","WITH mbp_measurements AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (
+      220050, -- Arterial Blood Pressure mean
+      220181, -- Non Invasive Blood Pressure mean
+      225312  -- Arterial Blood Pressure mean (post-filter)
+    )
+    AND valuenum IS NOT NULL
+),
+time_grid AS (
+  SELECT
+    stay_id,
+    time_bucket
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS time_bucket
+)
+SELECT
+  tg.stay_id,
+  tg.time_bucket,
+  MIN(mbp.valuenum) AS min_mbp_preceding_8hr
+FROM time_grid AS tg
+LEFT JOIN mbp_measurements AS mbp
+  ON tg.stay_id = mbp.stay_id
+  AND mbp.charttime >= TIMESTAMP_SUB(tg.time_bucket, INTERVAL 8 HOUR)
+  AND mbp.charttime < tg.time_bucket
+GROUP BY
+  tg.stay_id,
+  tg.time_bucket
+ORDER BY
+  tg.stay_id,
+  tg.time_bucket"
+Aggregating Existence at Event Times,4,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} before #now)
+at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,4,SQL,valid,,"-- Identifies the start of all invasive ventilation events from the procedureevents table.
+-- For each event, it includes a boolean flag indicating if it is a reoccurrence within the same ICU stay.
+WITH invasive_vent_events AS (
+  SELECT
+    proc.stay_id,
+    proc.starttime,
+    ROW_NUMBER() OVER (PARTITION BY proc.stay_id ORDER BY proc.starttime) AS rn
+  FROM
+    `physionet-data.mimiciv_3_1_icu.procedureevents` AS proc
+  INNER JOIN
+    `physionet-data.mimiciv_3_1_icu.d_items` AS items
+    ON proc.itemid = items.itemid
+  WHERE
+    items.label = 'Invasive Ventilation'
+)
+SELECT
+  stay_id,
+  starttime,
+  (rn > 1) AS has_previous_event
+FROM
+  invasive_vent_events
+ORDER BY
+  stay_id,
+  starttime"
+Rolling Difference,4,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",{Temperature Fahrenheit; scope = chartevents} - (mean({Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now))
+Rolling Difference,4,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type DATETIME at [26:13]
+
+Location: US
+Job ID: a8a22365-6fe2-4656-9c86-f214f8d58be2
+","-- Retrieves every Temperature Fahrenheit measurement from ICU chartevents.
+-- The `value` column represents the difference between the current temperature
+-- and the patient's average temperature over the preceding 8 hours.
+WITH temps AS (
+    -- Filter chartevents to only include temperature measurements and link to patient subject_id
+    SELECT
+        icu.stay_id,
+        icu.subject_id,
+        ce.charttime,
+        ce.valuenum
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+        ON icu.stay_id = ce.stay_id
+    WHERE
+        ce.itemid = 223761 -- Temperature Fahrenheit
+        AND ce.valuenum IS NOT NULL
+        AND ce.charttime BETWEEN icu.intime AND icu.outtime
+), temps_with_avg AS (
+    -- For each measurement, calculate the average temperature over the previous 8 hours for the patient
+    SELECT
+        stay_id,
+        charttime,
+        valuenum,
+        AVG(valuenum) OVER (
+            PARTITION BY subject_id
+            ORDER BY charttime
+            RANGE BETWEEN INTERVAL 8 HOUR PRECEDING AND INTERVAL 1 MICROSECOND PRECEDING
+        ) AS avg_temp_last_8h
+    FROM temps
+)
+-- Final select calculates the difference between the current temp and the rolling average
+SELECT
+    stay_id,
+    charttime,
+    valuenum - avg_temp_last_8h AS value
+FROM temps_with_avg
+ORDER BY
+    stay_id,
+    charttime;"
+Imputing Missing Values,4,TempoQL,valid,,"(mean {Temperature Fahrenheit; scope = chartevents; value = valuenum} from #now - 4 hours to #now)
+  impute mean
+  every 4 hours from {Admit Time} to {Discharge Time}"
+Imputing Missing Values,4,SQL,invalid,,"WITH temp_f_all AS (
+    -- Select all Temperature Fahrenheit measurements from chartevents
+    SELECT
+        stay_id,
+        charttime,
+        valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 223761 -- Temperature Fahrenheit
+        AND valuenum IS NOT NULL
+),
+global_avg_temp AS (
+    -- Calculate the single global average temperature for imputation
+    SELECT
+        AVG(valuenum) AS avg_temp_f_global
+    FROM
+        temp_f_all
+),
+time_grid AS (
+    -- For each ICU stay, generate a timestamp every 4 hours from admission to discharge
+    -- Each timestamp represents the end of a 4-hour measurement window
+    SELECT
+        stay_id,
+        four_hour_mark
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN
+        UNNEST(
+            GENERATE_TIMESTAMP_ARRAY(
+                TIMESTAMP_ADD(CAST(intime AS TIMESTAMP), INTERVAL 4 HOUR),
+                CAST(outtime AS TIMESTAMP),
+                INTERVAL 4 HOUR
+            )
+        ) AS four_hour_mark
+),
+binned_temps AS (
+    -- Calculate the average temperature for each 4-hour window
+    SELECT
+        tg.stay_id,
+        tg.four_hour_mark,
+        AVG(tfa.valuenum) AS avg_temp_f_binned
+    FROM
+        time_grid AS tg
+    LEFT JOIN
+        temp_f_all AS tfa
+        ON tg.stay_id = tfa.stay_id
+        -- The measurement must fall within the 4-hour window preceding the mark
+        AND CAST(tfa.charttime AS TIMESTAMP) >= TIMESTAMP_SUB(tg.four_hour_mark, INTERVAL 4 HOUR)
+        AND CAST(tfa.charttime AS TIMESTAMP) < tg.four_hour_mark
+    GROUP BY
+        tg.stay_id,
+        tg.four_hour_mark
+)
+-- Final select: impute missing window averages with the global average
+SELECT
+    bt.stay_id,
+    bt.four_hour_mark AS charttime,
+    COALESCE(bt.avg_temp_f_binned, gat.avg_temp_f_global) AS temperature_fahrenheit
+FROM
+    binned_temps AS bt
+CROSS JOIN
+    global_avg_temp AS gat
+ORDER BY
+    bt.stay_id,
+    bt.four_hour_mark;"
+Carrying Values Forward,4,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+  carry 2 days
+) every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,4,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [23:23]
+
+Location: US
+Job ID: 35135fd8-907f-4c37-8dcc-9034cc981f9c
+","WITH
+  o2_device_items AS (
+    SELECT
+      itemid
+    FROM `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+      label = 'O2 Delivery Device(s)' AND linksto = 'chartevents'
+  ),
+  o2_device_events AS (
+    SELECT
+      ce.stay_id,
+      ce.charttime,
+      ce.value
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    INNER JOIN o2_device_items AS di
+      ON ce.itemid = di.itemid
+  ),
+  time_grid AS (
+    SELECT
+      s.stay_id,
+      chart_hour
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS s
+    CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(
+      TIMESTAMP_ADD(s.intime, INTERVAL 24 HOUR),
+      s.outtime,
+      INTERVAL 24 HOUR
+    )) AS chart_hour
+  ),
+  o2_device_on_grid AS (
+    SELECT
+      tg.stay_id,
+      tg.chart_hour,
+      ode.value,
+      ode.charttime
+    FROM time_grid AS tg
+    LEFT JOIN o2_device_events AS ode
+      ON tg.stay_id = ode.stay_id
+      AND ode.charttime > TIMESTAMP_SUB(tg.chart_hour, INTERVAL 24 HOUR)
+      AND ode.charttime <= tg.chart_hour
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY tg.stay_id, tg.chart_hour ORDER BY ode.charttime ASC) = 1
+  ),
+  o2_device_carried_forward AS (
+    SELECT
+      stay_id,
+      chart_hour,
+      LAST_VALUE(value IGNORE NULLS)
+        OVER (
+          PARTITION BY stay_id
+          ORDER BY chart_hour
+        ) AS last_value,
+      LAST_VALUE(charttime IGNORE NULLS)
+        OVER (
+          PARTITION BY stay_id
+          ORDER BY chart_hour
+        ) AS last_charttime
+    FROM o2_device_on_grid
+  )
+SELECT
+  ficf.stay_id,
+  ficf.chart_hour,
+  CASE
+    WHEN
+      TIMESTAMP_DIFF(ficf.chart_hour, ficf.last_charttime, HOUR) < 72
+      THEN ficf.last_value
+    ELSE NULL
+  END AS o2_delivery_device
+FROM o2_device_carried_forward AS ficf
+ORDER BY
+  ficf.stay_id,
+  ficf.chart_hour;"
+Attributes,5,TempoQL,valid,,{Anchor Age} + (({Admit Time} - {Anchor Year}) as years)
+Attributes,5,SQL,valid,,"SELECT
+    icu.stay_id,
+    pat.anchor_age + EXTRACT(YEAR FROM icu.intime) - pat.anchor_year AS age
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+    ON icu.subject_id = pat.subject_id"
+Events,5,TempoQL,valid,,"{
+  scope = chartevents;
+  name in (
+    ""Respiratory Rate"",
+    ""Respiratory Rate (spontaneous)"",
+    ""Respiratory Rate (Total)"",
+    ""Respiratory Rate (Set)""
+  )
+}"
+Events,5,SQL,invalid,,"-- Retrieve all respiratory rate measurements from chartevents
+WITH rr_items AS (
+  SELECT
+    itemid
+  FROM
+    `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label IN (
+      'Respiratory Rate',
+      'Respiratory Rate (Set)',
+      'Respiratory Rate (spontaneous)',
+      'Respiratory Rate (total)'
+    )
+    AND linksto = 'chartevents'
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  ce.valuenum AS respiratory_rate
+FROM
+  `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN
+  rr_items
+  ON ce.itemid = rr_items.itemid"
+String Operations,5,TempoQL,valid,,{Diagnosis; scope = Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,5,SQL,valid,,"-- The user request specified ""diabetes"" but the provided ICD codes are for hypertension.
+-- This query uses the provided ICD codes (401*, 402*, 403*, 404*, 405*, I10*, I11*, I12*, I13*, I15*)
+-- which correspond to hypertensive diseases.
+WITH icu_diagnoses AS (
+  SELECT
+    icu.stay_id,
+    icu.outtime,
+    dx.icd_code,
+    dx.icd_version,
+    dx.seq_num
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+    ON icu.subject_id = dx.subject_id AND icu.hadm_id = dx.hadm_id
+)
+SELECT
+  d.stay_id,
+  d.outtime AS charttime,
+  d.icd_code,
+  d.icd_version,
+  (
+    STARTS_WITH(d.icd_code, '401')
+    OR STARTS_WITH(d.icd_code, '402')
+    OR STARTS_WITH(d.icd_code, '403')
+    OR STARTS_WITH(d.icd_code, '404')
+    OR STARTS_WITH(d.icd_code, '405')
+    OR STARTS_WITH(d.icd_code, 'I10')
+    OR STARTS_WITH(d.icd_code, 'I11')
+    OR STARTS_WITH(d.icd_code, 'I12')
+    OR STARTS_WITH(d.icd_code, 'I13')
+    OR STARTS_WITH(d.icd_code, 'I15')
+  ) AS value
+FROM icu_diagnoses AS d"
+Discretizing Observations,5,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,5,SQL,valid,,"WITH platelet_labs AS (
+    -- Filter labevents for platelet counts and join to ICU stays
+    -- filtering to events which occurred during the ICU stay
+    SELECT
+        icu.stay_id,
+        le.charttime,
+        le.valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+    INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+        ON le.subject_id = icu.subject_id AND le.hadm_id = icu.hadm_id
+    WHERE
+        le.itemid = 51265 -- Platelet Count
+        AND le.charttime >= icu.intime AND le.charttime < icu.outtime
+)
+SELECT
+    stay_id,
+    charttime,
+    -- Discretize the platelet count, preserving NULL values
+    CASE
+        WHEN valuenum < 130 THEN 'Low'
+        WHEN valuenum >= 400 THEN 'High'
+        WHEN valuenum IS NOT NULL THEN 'Normal'
+        -- If valuenum is NULL, all WHEN clauses are false, and the CASE expression returns NULL
+    END AS value
+FROM platelet_labs"
+Patient-Level Aggregation,5,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",min({Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime)
+Patient-Level Aggregation,5,SQL,invalid,,"WITH nibp_mean_events AS (
+    SELECT
+        stay_id,
+        charttime,
+        valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 220181 -- Non Invasive Blood Pressure mean
+        AND valuenum IS NOT NULL
+)
+SELECT
+    nibp.stay_id,
+    nibp.charttime,
+    nibp.valuenum
+FROM
+    nibp_mean_events AS nibp
+INNER JOIN
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    ON nibp.stay_id = icu.stay_id
+QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY nibp.valuenum ASC, nibp.charttime ASC) = 1"
+Daily Aggregation,5,TempoQL,valid,,(mean {Lactate; scope = Lab} from #now - 24 hours to #now) every 1 day from {Admit Time} to {Discharge Time}
+Daily Aggregation,5,SQL,invalid,,"WITH
+  lactate_events AS (
+    SELECT
+      hadm_id,
+      charttime,
+      valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents`
+    WHERE
+      itemid = 50813 -- Lactate
+      AND valuenum IS NOT NULL
+  ),
+  daily_grid AS (
+    SELECT
+      icu.stay_id,
+      icu.hadm_id,
+      day_timestamp
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+      ON icu.hadm_id = adm.hadm_id
+    CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(CAST(icu.intime AS TIMESTAMP), CAST(adm.dischtime AS TIMESTAMP), INTERVAL 1 DAY)) AS day_timestamp
+  )
+SELECT
+  dg.stay_id,
+  dg.day_timestamp,
+  AVG(le.valuenum) AS avg_lactate_preceding_24h
+FROM daily_grid AS dg
+LEFT JOIN lactate_events AS le
+  ON dg.hadm_id = le.hadm_id
+  AND CAST(le.charttime AS TIMESTAMP) >= TIMESTAMP_SUB(dg.day_timestamp, INTERVAL 24 HOUR)
+  AND CAST(le.charttime AS TIMESTAMP) < dg.day_timestamp
+GROUP BY
+  dg.stay_id,
+  dg.day_timestamp
+ORDER BY
+  dg.stay_id,
+  dg.day_timestamp"
+Aggregation in Overlapping Intervals,5,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","(
+  min({
+    name in (
+      ""Arterial Blood Pressure mean"",
+      ""Non Invasive Blood Pressure mean""
+    );
+    scope = chartevents
+  } from #now - 8 hours to #now)
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,5,SQL,error,"Reason: 400 Function not found: GENERATE_DATETIME_ARRAY; Did you mean generate_date_array? at [8:16]
+
+Location: US
+Job ID: ea4297dd-7eb3-4169-a3a8-de2b828754aa
+","WITH time_grid AS (
+    -- Generate a 4-hour time grid for each ICU stay from intime to outtime
+    SELECT
+        stay_id,
+        grid_time
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays`,
+        UNNEST(GENERATE_DATETIME_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS grid_time
+),
+mbp_events AS (
+    -- Filter chartevents for Mean Blood Pressure measurements
+    SELECT
+        stay_id,
+        charttime,
+        valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid IN (
+            220052, -- Arterial Blood Pressure mean
+            220181, -- Non Invasive Blood Pressure mean
+            225312  -- ART BP mean
+        )
+        AND valuenum IS NOT NULL
+)
+-- For each 4-hour time point, find the minimum MBP in the preceding 8 hours
+SELECT
+    grid.stay_id,
+    grid.grid_time AS charttime,
+    MIN(mbp.valuenum) AS min_mbp_last_8h
+FROM
+    time_grid AS grid
+LEFT JOIN
+    mbp_events AS mbp
+    ON
+        grid.stay_id = mbp.stay_id
+        -- The measurement must fall within the 8-hour window before the grid time
+        AND mbp.charttime >= DATETIME_SUB(grid.grid_time, INTERVAL 8 HOUR)
+        AND mbp.charttime < grid.grid_time
+GROUP BY
+    grid.stay_id,
+    grid.grid_time
+ORDER BY
+    grid.stay_id,
+    grid.grid_time;"
+Aggregating Existence at Event Times,5,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} from #mintime to #now)
+    at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,5,SQL,valid,,"-- Identifies the start of all invasive ventilation events from the procedureevents table.
+-- For each event, a boolean flag indicates if a previous ventilation event occurred during the same ICU stay.
+WITH invasive_vent_events AS (
+    SELECT
+        pe.stay_id,
+        pe.starttime
+    FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe
+    INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di
+        ON pe.itemid = di.itemid
+    WHERE
+        di.label = 'Invasive Ventilation'
+)
+, ranked_events AS (
+    SELECT
+        stay_id,
+        starttime,
+        -- Use LAG to find the starttime of the previous event for the same stay
+        LAG(starttime) OVER (PARTITION BY stay_id ORDER BY starttime) AS prev_starttime
+    FROM invasive_vent_events
+)
+SELECT
+    stay_id,
+    starttime,
+    -- The flag is true if there was a previous event (prev_starttime is not NULL)
+    (prev_starttime IS NOT NULL) AS had_previous_invasive_vent
+FROM ranked_events
+ORDER BY
+    stay_id,
+    starttime"
+Rolling Difference,5,TempoQL,error,"Exception occurred when processing variable 'None': 'now' keyword can only be used within a time-series expression, ending with an 'at'/'every'/'at every' clause.",{name = 'Temperature Fahrenheit'; scope = chartevents} - (mean {name = 'Temperature Fahrenheit'; scope = chartevents} from #now - 8 hours to #now)
+Rolling Difference,5,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type TIMESTAMP at [21:9]
+
+Location: US
+Job ID: 095c26f8-9676-477d-8779-b54738b4fa8f
+","WITH temperature_events AS (
+  SELECT
+    icu.stay_id
+    , icu.subject_id
+    , ce.charttime
+    , ce.valuenum
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    ON icu.stay_id = ce.stay_id
+  WHERE
+    ce.itemid = 223761 -- Temperature Fahrenheit
+    AND ce.valuenum IS NOT NULL
+)
+, temperature_with_avg AS (
+  SELECT
+    stay_id
+    , charttime
+    , valuenum
+    , AVG(valuenum) OVER (
+        PARTITION BY subject_id
+        ORDER BY CAST(charttime AS TIMESTAMP)
+        RANGE BETWEEN INTERVAL 8 HOUR PRECEDING AND INTERVAL 1 SECOND PRECEDING
+      ) AS avg_temp_last_8h
+  FROM temperature_events
+)
+SELECT
+  stay_id
+  , charttime
+  , valuenum - avg_temp_last_8h AS value
+FROM temperature_with_avg
+ORDER BY
+  stay_id
+  , charttime"
+Imputing Missing Values,5,TempoQL,valid,,(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now impute mean) every 4 hours from {Admit Time} to {Discharge Time}
+Imputing Missing Values,5,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [30:13]
+
+Location: US
+Job ID: fe27d027-ec5e-4bb1-944a-0cf66dd59fa0
+","WITH temp_f_measurements AS (
+    -- Select all temperature measurements in Fahrenheit
+    SELECT
+        stay_id,
+        charttime,
+        valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 223761 -- Temperature Fahrenheit
+        AND valuenum IS NOT NULL
+),
+global_mean_temp AS (
+    -- Calculate the global mean temperature from all available measurements
+    SELECT
+        AVG(valuenum) AS avg_temp_f_all
+    FROM
+        temp_f_measurements
+),
+time_grid AS (
+    -- Generate a 4-hourly time grid for each ICU stay.
+    -- The timestamps represent the end of each 4-hour window.
+    SELECT
+        stay_id,
+        end_of_window
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN
+        UNNEST(
+            GENERATE_TIMESTAMP_ARRAY(
+                TIMESTAMP_ADD(intime, INTERVAL 4 HOUR),
+                outtime,
+                INTERVAL 4 HOUR
+            )
+        ) AS end_of_window
+),
+avg_temp_per_window AS (
+    -- Calculate the average temperature for each 4-hour window
+    SELECT
+        tg.stay_id,
+        tg.end_of_window,
+        AVG(tfm.valuenum) AS avg_temp_f
+    FROM
+        time_grid AS tg
+    LEFT JOIN
+        temp_f_measurements AS tfm
+        ON tg.stay_id = tfm.stay_id
+        -- The measurement must be within the preceding 4-hour window
+        AND tfm.charttime >= TIMESTAMP_SUB(tg.end_of_window, INTERVAL 4 HOUR)
+        AND tfm.charttime < tg.end_of_window
+    GROUP BY
+        tg.stay_id,
+        tg.end_of_window
+)
+SELECT
+    atp.stay_id,
+    atp.end_of_window AS charttime,
+    -- If a window has no temperature data, impute with the global mean
+    IFNULL(atp.avg_temp_f, gmt.avg_temp_f_all) AS temperature_fahrenheit
+FROM
+    avg_temp_per_window AS atp
+CROSS JOIN
+    global_mean_temp AS gmt
+ORDER BY
+    atp.stay_id,
+    atp.end_of_window"
+Carrying Values Forward,5,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,5,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [29:16]
+
+Location: US
+Job ID: 1ce87541-c855-4426-8c49-2dabbdbe3af3
+","WITH
+o2_device_items AS (
+    SELECT
+        itemid
+    FROM
+        `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+        label = 'O2 Delivery Device(s)'
+),
+o2_events AS (
+    SELECT
+        ce.stay_id,
+        ce.charttime,
+        ce.value
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    INNER JOIN
+        o2_device_items AS di ON ce.itemid = di.itemid
+    WHERE
+        ce.value IS NOT NULL
+),
+stay_hours AS (
+    SELECT
+        ic.stay_id,
+        hr
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays` AS ic
+    CROSS JOIN
+        UNNEST(GENERATE_TIMESTAMP_ARRAY(ic.intime, ic.outtime, INTERVAL 24 HOUR)) AS hr
+),
+values_in_window AS (
+    SELECT
+        sh.stay_id,
+        sh.hr,
+        o2.value,
+        o2.charttime
+    FROM
+        stay_hours AS sh
+    LEFT JOIN
+        o2_events AS o2
+        ON sh.stay_id = o2.stay_id
+        AND o2.charttime > TIMESTAMP_SUB(sh.hr, INTERVAL 24 HOUR)
+        AND o2.charttime <= sh.hr
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY sh.stay_id, sh.hr ORDER BY o2.charttime ASC) = 1
+),
+imputed_values AS (
+    SELECT
+        stay_id,
+        hr,
+        value,
+        charttime,
+        LAST_VALUE(value IGNORE NULLS) OVER (
+            PARTITION BY stay_id ORDER BY hr
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS last_value,
+        LAST_VALUE(charttime IGNORE NULLS) OVER (
+            PARTITION BY stay_id ORDER BY hr
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS last_charttime
+    FROM
+        values_in_window
+)
+SELECT
+    iv.stay_id,
+    iv.hr AS timestamp,
+    CASE
+        WHEN iv.value IS NOT NULL THEN iv.value
+        WHEN iv.hr <= TIMESTAMP_ADD(iv.last_charttime, INTERVAL 2 DAY) THEN iv.last_value
+        ELSE NULL
+    END AS value
+FROM
+    imputed_values AS iv
+ORDER BY
+    iv.stay_id,
+    iv.hr"
+Attributes,6,TempoQL,valid,,{Anchor Age} + (({Admit Time} - {Anchor Year}) as years)
+Attributes,6,SQL,invalid,,"-- Calculate patient age at the time of each ICU admission.
+-- Age is calculated as the difference between the ICU admission year and the patient's anchor year,
+-- added to the patient's anchor age.
+SELECT
+    icu.stay_id,
+    pat.anchor_age + DATETIME_DIFF(icu.intime, DATETIME(SAFE_CAST(SUBSTR(pat.anchor_year_group, 1, 4) AS INT64), 1, 1, 0, 0, 0), YEAR) AS age
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+    ON icu.subject_id = pat.subject_id"
+Events,6,TempoQL,valid,,"{scope = chartevents; name in (""Respiratory Rate"", ""Respiratory Rate (spontaneous)"", ""Respiratory Rate (Total)"", ""Respiratory Rate (Set)"")}"
+Events,6,SQL,valid,,"-- Selects all respiratory rate measurements from chartevents.
+-- This query identifies relevant itemids using d_items and then extracts the corresponding measurements.
+-- It specifically targets measured respiratory rates, excluding ventilator settings.
+WITH rr_itemids AS (
+  SELECT
+    itemid
+  FROM
+    `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label IN (
+      'Respiratory Rate',
+      'Respiratory Rate (Total)',
+      'Respiratory Rate (spontaneous)',
+      'Spontaneous Resp Rate',
+      'Resp Rate (Non-Invasive)'
+    )
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  ce.valuenum AS respiratory_rate
+FROM
+  `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN
+  rr_itemids
+  ON ce.itemid = rr_itemids.itemid"
+String Operations,6,TempoQL,invalid,,{Diagnosis} matches /^(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,6,SQL,valid,,"-- Extracts all diagnoses for ICU patients and flags whether they are related to
+-- a specific list of ICD codes, which the user has labeled as 'diabetes'.
+-- Note: The provided ICD codes (e.g., '401', 'I10') correspond to hypertension, not diabetes.
+-- The query implements the request as specified.
+WITH icu_diagnoses AS (
+  SELECT
+    icu.stay_id,
+    icu.outtime,
+    dx.icd_code,
+    dx.icd_version
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+    ON icu.subject_id = dx.subject_id AND icu.hadm_id = dx.hadm_id
+)
+SELECT
+  d.stay_id,
+  d.outtime AS timestamp,
+  d.icd_code,
+  d.icd_version,
+  (
+    STARTS_WITH(d.icd_code, '401')
+    OR STARTS_WITH(d.icd_code, '402')
+    OR STARTS_WITH(d.icd_code, '403')
+    OR STARTS_WITH(d.icd_code, '404')
+    OR STARTS_WITH(d.icd_code, '405')
+    OR STARTS_WITH(d.icd_code, 'I10')
+    OR STARTS_WITH(d.icd_code, 'I11')
+    OR STARTS_WITH(d.icd_code, 'I12')
+    OR STARTS_WITH(d.icd_code, 'I13')
+    OR STARTS_WITH(d.icd_code, 'I15')
+  ) AS is_diabetes_related
+FROM
+  icu_diagnoses AS d"
+Discretizing Observations,6,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,6,SQL,valid,,"WITH platelet_items AS (
+    SELECT
+        itemid
+    FROM
+        `physionet-data.mimiciv_3_1_hosp.d_labitems`
+    WHERE
+        label = 'Platelet Count'
+)
+, platelet_events AS (
+    SELECT
+        subject_id
+        , hadm_id
+        , charttime
+        , valuenum
+    FROM
+        `physionet-data.mimiciv_3_1_hosp.labevents`
+    WHERE
+        itemid IN (SELECT itemid FROM platelet_items)
+)
+SELECT
+    icu.stay_id
+    , le.charttime
+    , CASE
+        WHEN le.valuenum < 130 THEN 'Low'
+        WHEN le.valuenum >= 400 THEN 'High'
+        WHEN le.valuenum >= 130 AND le.valuenum < 400 THEN 'Normal'
+        ELSE NULL
+    END AS platelet_count
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN platelet_events AS le
+    ON icu.subject_id = le.subject_id
+    AND icu.hadm_id = le.hadm_id
+WHERE
+    le.charttime >= icu.intime AND le.charttime < icu.outtime"
+Patient-Level Aggregation,6,TempoQL,valid,,min {Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime
+Patient-Level Aggregation,6,SQL,invalid,,"WITH nibp_events AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  INNER JOIN
+    `physionet-data.mimiciv_3_1_icu.d_items` AS di
+    ON ce.itemid = di.itemid
+  WHERE
+    di.label = 'Non Invasive Blood Pressure mean' AND di.linksto = 'chartevents' AND ce.valuenum IS NOT NULL
+)
+SELECT
+  ne.stay_id,
+  ne.charttime,
+  ne.valuenum
+FROM
+  `ai-clinician.tempo_ql_scratch_mimic.icustays` AS ie
+INNER JOIN
+  nibp_events AS ne
+  ON ie.stay_id = ne.stay_id
+QUALIFY ROW_NUMBER() OVER (PARTITION BY ie.subject_id ORDER BY ne.valuenum ASC, ne.charttime ASC) = 1"
+Daily Aggregation,6,TempoQL,valid,,(mean {Lactate; scope = Lab} from #now - 24 hours to #now) every 1 day from {Admit Time} to {Discharge Time}
+Daily Aggregation,6,SQL,error,"Reason: 400 Function not found: GENERATE_DATETIME_ARRAY; Did you mean generate_date_array? at [41:9]
+
+Location: US
+Job ID: 55862e15-880a-434f-b2fb-a400c1996e3a
+","WITH
+  icu_admissions AS (
+    -- Get ICU stay details along with hospital admission/discharge times
+    SELECT
+      icu.stay_id,
+      icu.hadm_id,
+      icu.intime AS icu_intime,
+      adm.dischtime AS hospital_dischtime
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN
+      `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+      ON icu.subject_id = adm.subject_id AND icu.hadm_id = adm.hadm_id
+  ),
+  lactate_events AS (
+    -- Get all lactate measurements for patients who had an ICU stay
+    SELECT
+      lab.hadm_id,
+      lab.charttime,
+      lab.valuenum
+    FROM
+      `physionet-data.mimiciv_3_1_hosp.labevents` AS lab
+    WHERE
+      lab.itemid = 50813 -- Lactate
+      AND lab.valuenum IS NOT NULL
+      AND lab.hadm_id IN (
+        SELECT hadm_id FROM icu_admissions
+      )
+  ),
+  daily_series AS (
+    -- For each ICU stay, generate a timestamp for the end of each 24-hour period,
+    -- starting 24 hours after ICU admission up to hospital discharge.
+    SELECT
+      adm.stay_id,
+      adm.hadm_id,
+      day_timestamp
+    FROM
+      icu_admissions AS adm
+    CROSS JOIN
+      UNNEST(
+        GENERATE_DATETIME_ARRAY(
+          DATETIME_ADD(adm.icu_intime, INTERVAL 1 DAY),
+          adm.hospital_dischtime,
+          INTERVAL 1 DAY
+        )
+      ) AS day_timestamp
+  )
+SELECT
+  ds.stay_id,
+  ds.day_timestamp AS timestamp,
+  AVG(le.valuenum) AS avg_lactate_past_24h
+FROM
+  daily_series AS ds
+LEFT JOIN
+  lactate_events AS le
+  ON ds.hadm_id = le.hadm_id
+  -- The measurement must be in the 24 hours preceding the day's timestamp
+  AND le.charttime >= DATETIME_SUB(ds.day_timestamp, INTERVAL 24 HOUR)
+  AND le.charttime < ds.day_timestamp
+GROUP BY
+  ds.stay_id,
+  ds.day_timestamp
+ORDER BY
+  ds.stay_id,
+  ds.day_timestamp"
+Aggregation in Overlapping Intervals,6,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","(
+  min({
+    name in (""Arterial Blood Pressure mean"", ""Non Invasive Blood Pressure mean"");
+    scope = chartevents
+  } from #now - 8 hours to #now)
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,6,SQL,error,"Reason: 400 No matching signature for operator >= for argument types: DATETIME, TIMESTAMP
+  Signature: T1 >= T1
+    Unable to find common supertype for templated argument <T1>
+      Input types for <T1>: {TIMESTAMP, DATETIME} at [42:9]
+
+Location: US
+Job ID: e2788d09-5271-4e44-ae87-13c4c6fe7a9c
+","-- Calculates the minimum mean blood pressure (MBP) in an 8-hour rolling window,
+-- sampled every 4 hours during each ICU stay.
+WITH mbp_items AS (
+  SELECT itemid
+  FROM `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label IN (
+      'Arterial Blood Pressure mean',
+      'Non Invasive Blood Pressure mean',
+      'ART BP mean'
+    )
+    AND linksto = 'chartevents'
+), mbp_events AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (SELECT itemid FROM mbp_items)
+    AND valuenum IS NOT NULL
+), time_grid AS (
+  SELECT
+    stay_id,
+    icu_time
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN
+    UNNEST(
+      GENERATE_TIMESTAMP_ARRAY(
+        CAST(intime AS TIMESTAMP), CAST(outtime AS TIMESTAMP), INTERVAL 4 HOUR
+      )
+    ) AS icu_time
+)
+SELECT
+  tg.stay_id,
+  tg.icu_time AS charttime,
+  MIN(mbp.valuenum) AS min_mbp_last_8h
+FROM time_grid AS tg
+LEFT JOIN mbp_events AS mbp
+  ON
+    tg.stay_id = mbp.stay_id
+    AND mbp.charttime >= TIMESTAMP_SUB(tg.icu_time, INTERVAL 8 HOUR)
+    AND mbp.charttime <= tg.icu_time
+GROUP BY
+  tg.stay_id,
+  tg.icu_time
+ORDER BY
+  tg.stay_id,
+  tg.icu_time"
+Aggregating Existence at Event Times,6,TempoQL,valid,,(exists {Invasive Ventilation; scope = procedureevents} before #now) at every start({Invasive Ventilation; scope = procedureevents})
+Aggregating Existence at Event Times,6,SQL,valid,,"-- Finds the start time for every 'Invasive Ventilation' event in the ICU
+-- and indicates if a previous ventilation event occurred during the same ICU stay.
+WITH invasive_vent_events AS (
+  SELECT
+    proc.stay_id,
+    proc.starttime,
+    -- Rank the ventilation events chronologically for each ICU stay
+    ROW_NUMBER() OVER (PARTITION BY proc.stay_id ORDER BY proc.starttime) AS rn
+  FROM
+    `physionet-data.mimiciv_3_1_icu.procedureevents` AS proc
+  WHERE
+    proc.itemid = 225792 -- Invasive Ventilation
+)
+SELECT
+  iv.stay_id,
+  iv.starttime,
+  -- If the rank is greater than 1, it means a previous event exists for this stay
+  (iv.rn > 1) AS had_previous_invasive_vent
+FROM
+  invasive_vent_events AS iv
+ORDER BY
+  iv.stay_id,
+  iv.starttime"
+Rolling Difference,6,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",{Temperature Fahrenheit; scope = chartevents} - (mean({Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now))
+Rolling Difference,6,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type DATETIME at [21:5]
+
+Location: US
+Job ID: bdb1e9a0-5733-42f6-9795-8460e4717019
+","-- Retrieve every Temperature Fahrenheit event and calculate the difference from the patient's 8-hour rolling average temperature
+WITH temp_events AS (
+  SELECT
+    ie.subject_id,
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS ie
+    ON ce.stay_id = ie.stay_id
+  WHERE
+    ce.itemid = 223761 -- Temperature Fahrenheit
+)
+SELECT
+  stay_id,
+  charttime,
+  -- Calculate the difference between the current temp and the avg of the preceding 8 hours
+  valuenum - AVG(valuenum) OVER (
+    PARTITION BY
+      subject_id
+    ORDER BY
+      charttime
+    RANGE BETWEEN INTERVAL 8 HOUR PRECEDING AND INTERVAL 1 SECOND PRECEDING
+  ) AS value
+FROM temp_events"
+Imputing Missing Values,6,TempoQL,valid,,"(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now)
+impute mean
+every 4 hours from {Admit Time} to {Discharge Time}"
+Imputing Missing Values,6,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [23:23]
+
+Location: US
+Job ID: b06ba42f-5699-4628-bd60-4b52a5fb40ab
+","WITH
+  temperature_events AS (
+    SELECT
+      stay_id,
+      charttime,
+      valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 223761 -- Temperature Fahrenheit
+      AND valuenum IS NOT NULL
+  ),
+  global_mean_temp AS (
+    SELECT
+      AVG(valuenum) AS overall_avg_temp
+    FROM temperature_events
+  ),
+  time_grid AS (
+    SELECT
+      stay_id,
+      interval_start,
+      TIMESTAMP_ADD(interval_start, INTERVAL 4 HOUR) AS interval_end
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS interval_start
+  ),
+  binned_temps AS (
+    SELECT
+      g.stay_id,
+      g.interval_end AS charttime,
+      AVG(t.valuenum) AS avg_temp_f
+    FROM time_grid AS g
+    LEFT JOIN temperature_events AS t
+      ON g.stay_id = t.stay_id
+      AND t.charttime >= g.interval_start
+      AND t.charttime < g.interval_end
+    GROUP BY
+      g.stay_id,
+      g.interval_end
+  )
+SELECT
+  bt.stay_id,
+  bt.charttime,
+  COALESCE(bt.avg_temp_f, gmt.overall_avg_temp) AS temperature_fahrenheit
+FROM binned_temps AS bt
+CROSS JOIN global_mean_temp AS gmt
+ORDER BY
+  bt.stay_id,
+  bt.charttime"
+Carrying Values Forward,6,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+) carry 2 days every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,6,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [8:21]
+
+Location: US
+Job ID: e944e33d-927f-4cf4-b6b7-b3364d7c7074
+","WITH icu_stays_with_grid AS (
+  -- Generate a grid of 24-hour timestamps for each ICU stay
+  SELECT
+    stay_id,
+    hourly_timestamp
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(
+    TIMESTAMP_ADD(intime, INTERVAL 24 HOUR),
+    outtime,
+    INTERVAL 24 HOUR
+  )) AS hourly_timestamp
+),
+o2_device_events AS (
+  -- Extract O2 Delivery Device events from chartevents
+  SELECT
+    stay_id,
+    charttime,
+    value
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223834 -- O2 Delivery Device(s)
+),
+events_in_window AS (
+  -- For each 24-hour window, find the earliest O2 device event
+  SELECT
+    grid.stay_id,
+    grid.hourly_timestamp,
+    o2.value,
+    o2.charttime AS event_charttime
+  FROM
+    icu_stays_with_grid AS grid
+  LEFT JOIN
+    o2_device_events AS o2
+    ON
+      grid.stay_id = o2.stay_id
+      AND o2.charttime >= TIMESTAMP_SUB(grid.hourly_timestamp, INTERVAL 24 HOUR)
+      AND o2.charttime < grid.hourly_timestamp
+  QUALIFY
+    ROW_NUMBER()
+      OVER (PARTITION BY grid.stay_id, grid.hourly_timestamp ORDER BY o2.charttime ASC)
+    = 1
+),
+locf AS (
+  -- Prepare for last observation carried forward by finding the last non-null value and its timestamp
+  SELECT
+    stay_id,
+    hourly_timestamp,
+    value,
+    event_charttime,
+    LAST_VALUE(value IGNORE NULLS) OVER (
+      PARTITION BY
+        stay_id
+      ORDER BY
+        hourly_timestamp
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS carried_value,
+    LAST_VALUE(event_charttime IGNORE NULLS) OVER (
+      PARTITION BY
+        stay_id
+      ORDER BY
+        hourly_timestamp
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS carried_charttime
+  FROM
+    events_in_window
+)
+-- Final selection and application of the carry-forward logic
+SELECT
+  stay_id,
+  hourly_timestamp,
+  CASE
+    WHEN value IS NOT NULL
+      THEN value -- Use the value from the current window if it exists
+    WHEN
+      carried_charttime IS NOT NULL
+      AND TIMESTAMP_DIFF(hourly_timestamp, carried_charttime, HOUR) <= 48
+      THEN carried_value -- Otherwise, use the carried value if it's within 2 days (48 hours)
+    ELSE NULL
+  END AS o2_delivery_device
+FROM
+  locf
+ORDER BY
+  stay_id,
+  hourly_timestamp;"
+Attributes,7,TempoQL,valid,,{Anchor Age} + ({Admit Time} - {Anchor Year}) as years
+Attributes,7,SQL,valid,,"-- Calculate the age of each patient at the time of their ICU admission.
+-- The age is calculated as the anchor_age plus the difference in years
+-- between the ICU admission time and the anchor_year.
+SELECT
+  icu.stay_id,
+  pat.anchor_age + DATETIME_DIFF(icu.intime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) AS age_at_icu_admission
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+  ON icu.subject_id = pat.subject_id"
+Events,7,TempoQL,valid,,{scope = chartevents; name contains /resp.*rate/i}
+Events,7,SQL,invalid,,"WITH rr_items AS (
+  SELECT
+    itemid
+  FROM `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label IN ('Respiratory Rate', 'Respiratory Rate (Set)', 'Respiratory Rate (spontaneous)', 'Respiratory Rate (Total)')
+    AND linksto = 'chartevents'
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  ce.valuenum
+FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN rr_items
+  ON ce.itemid = rr_items.itemid"
+String Operations,7,TempoQL,invalid,,{Diagnosis} startswith /(250|E08|E09|E10|E11|E12|E13)/
+String Operations,7,SQL,valid,,"-- The user has requested to flag diagnoses as 'diabetes' based on a list of ICD codes.
+-- NOTE: The provided ICD codes (401*, I10-I15*) correspond to Hypertension, not Diabetes.
+-- This query implements the user's request as specified, using the provided codes.
+WITH all_diagnoses AS (
+    SELECT
+        icu.stay_id,
+        icu.outtime,
+        dx.icd_code,
+        dx.icd_version
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN
+        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+        ON icu.subject_id = dx.subject_id AND icu.hadm_id = dx.hadm_id
+)
+SELECT
+    d.stay_id,
+    d.outtime AS charttime,
+    d.icd_code,
+    d.icd_version,
+    (
+        STARTS_WITH(d.icd_code, '401')
+        OR STARTS_WITH(d.icd_code, '402')
+        OR STARTS_WITH(d.icd_code, '403')
+        OR STARTS_WITH(d.icd_code, '404')
+        OR STARTS_WITH(d.icd_code, '405')
+        OR STARTS_WITH(d.icd_code, 'I10')
+        OR STARTS_WITH(d.icd_code, 'I11')
+        OR STARTS_WITH(d.icd_code, 'I12')
+        OR STARTS_WITH(d.icd_code, 'I13')
+        OR STARTS_WITH(d.icd_code, 'I15')
+    ) AS value
+FROM
+    all_diagnoses AS d"
+Discretizing Observations,7,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,7,SQL,valid,,"WITH platelets_in_icu AS (
+  SELECT
+    icu.stay_id,
+    le.charttime,
+    le.valuenum
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+    ON icu.subject_id = le.subject_id AND icu.hadm_id = le.hadm_id
+  WHERE
+    le.itemid = 51265 -- Platelet Count
+    AND le.charttime >= icu.intime AND le.charttime < icu.outtime
+)
+SELECT
+  stay_id,
+  charttime,
+  CASE
+    WHEN valuenum < 130 THEN 'Low'
+    WHEN valuenum >= 400 THEN 'High'
+    WHEN valuenum IS NOT NULL
+      THEN 'Normal'
+    ELSE NULL
+  END AS platelet_level
+FROM platelets_in_icu"
+Patient-Level Aggregation,7,TempoQL,valid,,min {Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime
+Patient-Level Aggregation,7,SQL,invalid,,"WITH nibp_events AS (
+  -- Link ICU stays to the relevant chart events to get subject_id
+  SELECT
+    i.subject_id,
+    i.stay_id,
+    c.valuenum
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS i
+  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS c
+    ON i.stay_id = c.stay_id
+  WHERE
+    c.itemid = 220181 -- Non Invasive Blood Pressure mean
+    AND c.valuenum IS NOT NULL
+), patient_min AS (
+  -- Use a window function to find the minimum value for each patient across all their stays
+  SELECT
+    stay_id,
+    MIN(valuenum) OVER (PARTITION BY subject_id) AS min_nibp_mean_patient
+  FROM nibp_events
+)
+-- For each ICU stay, report the patient's overall minimum value
+SELECT DISTINCT
+  stay_id,
+  min_nibp_mean_patient AS value
+FROM patient_min
+ORDER BY
+  stay_id;"
+Daily Aggregation,7,TempoQL,valid,,"(mean {Lactate; scope = Lab} from #now - 24 hours to #now)
+  every 1 day from {Admit Time} to {Discharge Time}"
+Daily Aggregation,7,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [14:9]
+
+Location: US
+Job ID: e9e98ab8-7ddb-4597-a44e-1898a8c24add
+","-- For each ICU stay, generates a daily series of timestamps from ICU admission to hospital discharge.
+-- For each timestamp, calculates the average lactate value in the preceding 24 hours.
+WITH
+daily_series AS (
+    SELECT
+        icu.stay_id,
+        icu.hadm_id,
+        day_timestamp
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+        ON icu.hadm_id = adm.hadm_id
+    -- Create a timestamp for each day from ICU intime until hospital dischtime
+    CROSS JOIN UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(icu.intime, adm.dischtime, INTERVAL 1 DAY)
+    ) AS day_timestamp
+),
+lactate_events AS (
+    SELECT
+        hadm_id,
+        charttime,
+        valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents`
+    -- Filter to lactate and admissions with an ICU stay to improve performance
+    WHERE
+        itemid = 50813 -- Lactate
+        AND valuenum IS NOT NULL
+        AND hadm_id IN (SELECT hadm_id FROM daily_series)
+)
+SELECT
+    ds.stay_id,
+    ds.day_timestamp,
+    AVG(le.valuenum) AS avg_lactate_preceding_24hr
+FROM daily_series AS ds
+LEFT JOIN lactate_events AS le
+    -- Join lactate measurements that occurred in the 24 hours preceding the daily timestamp
+    ON ds.hadm_id = le.hadm_id
+    AND le.charttime >= TIMESTAMP_SUB(ds.day_timestamp, INTERVAL 24 HOUR)
+    AND le.charttime < ds.day_timestamp
+GROUP BY
+    ds.stay_id,
+    ds.day_timestamp
+ORDER BY
+    ds.stay_id,
+    ds.day_timestamp"
+Aggregation in Overlapping Intervals,7,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","(
+  min({
+    name in ('Arterial Blood Pressure mean', 'Non Invasive Blood Pressure mean');
+    scope = chartevents
+  } from #now - 8 hours to #now)
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,7,SQL,valid,,"-- This query generates a time series for each ICU stay, with one row every 4 hours.
+-- For each row, it calculates the minimum Mean Blood Pressure (MBP) from the preceding 8 hours.
+-- MBP is identified using itemids for 'Arterial Blood Pressure mean' and 'Non Invasive Blood Pressure mean'.
+WITH
+
+-- Generate 4-hour timestamps for each ICU stay from admission to discharge
+time_series AS (
+    SELECT
+        stay_id,
+        chart_hour
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+            CAST(intime AS TIMESTAMP),
+            CAST(outtime AS TIMESTAMP),
+            INTERVAL 4 HOUR
+        )
+    ) AS chart_hour
+),
+
+-- Filter chartevents to only include Mean Blood Pressure measurements
+mbp_events AS (
+    SELECT
+        stay_id,
+        CAST(charttime AS TIMESTAMP) AS charttime,
+        valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid IN (
+            220052, -- Arterial Blood Pressure mean
+            220181  -- Non Invasive Blood Pressure mean
+        )
+        AND valuenum IS NOT NULL
+)
+
+-- For each 4-hour timestamp, find the minimum MBP in the preceding 8-hour window
+SELECT
+    ts.stay_id,
+    ts.chart_hour,
+    MIN(mbp.valuenum) AS min_mbp_preceding_8hr
+FROM time_series AS ts
+LEFT JOIN mbp_events AS mbp
+    ON ts.stay_id = mbp.stay_id
+    -- The measurement must be in the 8-hour window before the current timestamp
+    AND mbp.charttime >= TIMESTAMP_SUB(ts.chart_hour, INTERVAL 8 HOUR)
+    AND mbp.charttime < ts.chart_hour
+GROUP BY
+    ts.stay_id,
+    ts.chart_hour
+ORDER BY
+    ts.stay_id,
+    ts.chart_hour"
+Aggregating Existence at Event Times,7,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} before #now)
+at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,7,SQL,valid,,"-- This query identifies the start of all 'Invasive Ventilation' procedures from the procedureevents table.
+-- It assumes 'procedures table' in the request refers to 'icu.procedureevents' as it is the only
+-- table with timestamped procedure data at the ICU stay level.
+-- A boolean flag indicates if an earlier invasive ventilation event occurred during the same ICU stay.
+WITH
+  invasive_vent_item AS (
+    SELECT
+      itemid
+    FROM `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+      label = 'Invasive Ventilation'
+  ),
+  ventilation_events AS (
+    SELECT
+      pe.stay_id,
+      pe.starttime
+    FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe
+    INNER JOIN invasive_vent_item AS ivi
+      ON pe.itemid = ivi.itemid
+    WHERE
+      pe.starttime IS NOT NULL
+  ),
+  ranked_ventilation_events AS (
+    SELECT
+      stay_id,
+      starttime,
+      ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY starttime) AS vent_rank
+    FROM ventilation_events
+  )
+SELECT
+  rve.stay_id,
+  rve.starttime,
+  (rve.vent_rank > 1) AS had_previous_invasive_vent
+FROM ranked_ventilation_events AS rve
+ORDER BY
+  rve.stay_id,
+  rve.starttime"
+Rolling Difference,7,TempoQL,error,"Exception occurred when processing variable 'None': 'now' keyword can only be used within a time-series expression, ending with an 'at'/'every'/'at every' clause.",{Temperature Fahrenheit; scope = chartevents} - (mean {Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now)
+Rolling Difference,7,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type TIMESTAMP at [21:7]
+
+Location: US
+Job ID: 8e8951e1-f8ef-4674-b4ec-14123dfc963d
+","-- Calculate the difference between each Temperature Fahrenheit measurement and the patient's 8-hour rolling average
+WITH temp_fahrenheit AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223761 -- Temperature Fahrenheit
+    AND valuenum IS NOT NULL
+),
+temp_with_rolling_avg AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum,
+    AVG(valuenum) OVER (
+      PARTITION BY
+        stay_id
+      ORDER BY
+        CAST(charttime AS TIMESTAMP)
+      RANGE BETWEEN INTERVAL 8 HOUR PRECEDING
+      AND INTERVAL 1 SECOND PRECEDING
+    ) AS avg_temp_last_8h
+  FROM
+    temp_fahrenheit
+)
+SELECT
+  stay_id,
+  charttime,
+  temp_with_rolling_avg.valuenum - temp_with_rolling_avg.avg_temp_last_8h AS value
+FROM
+  temp_with_rolling_avg"
+Imputing Missing Values,7,TempoQL,valid,,"(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now impute mean)
+  every 4 hours from {Admit Time} to {Discharge Time}"
+Imputing Missing Values,7,SQL,error,"Reason: 400 Syntax error: Expected "")"" but got ""("" at [40:19]
+
+Location: US
+Job ID: 7fe2110b-fbca-44f4-bbe0-bdea8b3b9231
+","WITH
+  all_temperatures AS (
+    -- Selects and unifies temperature measurements from chartevents, converting Celsius to Fahrenheit
+    SELECT
+      ce.stay_id,
+      ce.charttime,
+      CASE
+        WHEN ce.itemid = 223762 -- Temperature Celsius
+        THEN (ce.valuenum * 9 / 5) + 32
+        ELSE ce.valuenum
+      END AS temperature_fahrenheit
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    WHERE
+      ce.itemid IN (
+        223761, -- Temperature Fahrenheit
+        223762  -- Temperature Celsius
+      )
+      AND ce.valuenum IS NOT NULL
+  ),
+  global_mean_temp AS (
+    -- Calculates the global mean temperature for imputation
+    SELECT
+      AVG(temperature_fahrenheit) AS avg_global
+    FROM all_temperatures
+  ),
+  time_grid AS (
+    -- Generates a 4-hour time grid for each ICU stay.
+    -- Each timestamp marks the end of a 4-hour interval.
+    SELECT
+      icu.stay_id,
+      series.chart_hour
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    CROSS JOIN
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          TIMESTAMP_ADD(TIMESTAMP(icu.intime), INTERVAL 4 HOUR),
+          TIMESTAMP_ADD(TIMESTAMP(icu.outtime), INTERVAL 1 MICROSECOND), -- Add a microsecond to make the outtime inclusive
+          INTERVAL 4 HOUR
+        )
+      ) AS series (chart_hour)
+  ),
+  windowed_avg_temp AS (
+    -- Calculates the average temperature for each 4-hour window
+    SELECT
+      tg.stay_id,
+      tg.chart_hour,
+      AVG(at.temperature_fahrenheit) AS avg_temp_window
+    FROM time_grid AS tg
+    LEFT JOIN all_temperatures AS at
+      ON tg.stay_id = at.stay_id
+      -- The measurement must fall within the preceding 4-hour window
+      AND TIMESTAMP(at.charttime) >= TIMESTAMP_SUB(tg.chart_hour, INTERVAL 4 HOUR)
+      AND TIMESTAMP(at.charttime) < tg.chart_hour
+    GROUP BY
+      tg.stay_id,
+      tg.chart_hour
+  )
+SELECT
+  wat.stay_id,
+  wat.chart_hour,
+  COALESCE(wat.avg_temp_window, gmt.avg_global) AS temperature_fahrenheit
+FROM windowed_avg_temp AS wat
+CROSS JOIN global_mean_temp AS gmt
+ORDER BY
+  wat.stay_id,
+  wat.chart_hour"
+Carrying Values Forward,7,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+) carry 2 days every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,7,SQL,invalid,,"WITH o2_devices AS (
+  SELECT
+    stay_id,
+    CAST(charttime AS TIMESTAMP) AS charttime,
+    NULLIF(value, '') AS value
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223835
+),
+hourly_grid AS (
+  SELECT
+    stay_id,
+    generated_timestamp
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays`,
+    UNNEST(
+      GENERATE_TIMESTAMP_ARRAY(
+        CAST(intime AS TIMESTAMP),
+        CAST(outtime AS TIMESTAMP),
+        INTERVAL 24 HOUR
+      )
+    ) AS generated_timestamp
+),
+o2_by_hour AS (
+  SELECT
+    hg.stay_id,
+    hg.generated_timestamp AS chart_timestamp,
+    o2.value,
+    o2.charttime
+  FROM
+    hourly_grid AS hg
+  LEFT JOIN
+    o2_devices AS o2
+    ON
+      hg.stay_id = o2.stay_id
+      AND o2.charttime >= TIMESTAMP_SUB(hg.generated_timestamp, INTERVAL 24 HOUR)
+      AND o2.charttime < hg.generated_timestamp
+  QUALIFY
+    ROW_NUMBER()
+      OVER (PARTITION BY hg.stay_id, hg.generated_timestamp ORDER BY o2.charttime ASC) = 1
+),
+carry_forward_prep AS (
+  SELECT
+    stay_id,
+    chart_timestamp,
+    value,
+    LAST_VALUE(value IGNORE NULLS)
+      OVER (
+        PARTITION BY stay_id ORDER BY chart_timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS last_value,
+    LAST_VALUE(charttime IGNORE NULLS)
+      OVER (
+        PARTITION BY stay_id ORDER BY chart_timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS last_charttime
+  FROM
+    o2_by_hour
+)
+SELECT
+  stay_id,
+  chart_timestamp,
+  CASE
+    WHEN value IS NOT NULL
+      THEN value
+    WHEN TIMESTAMP_DIFF(chart_timestamp, last_charttime, HOUR) <= 48
+      THEN last_value
+    ELSE NULL
+  END AS o2_delivery_device
+FROM
+  carry_forward_prep
+ORDER BY
+  stay_id,
+  chart_timestamp"
+Attributes,8,TempoQL,valid,,{Anchor Age} + ({Admit Time} - {Anchor Year}) as years
+Attributes,8,SQL,valid,,"SELECT
+    icu.stay_id,
+    (EXTRACT(YEAR FROM icu.intime) - pat.anchor_year) + pat.anchor_age AS age
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+    ON icu.subject_id = pat.subject_id"
+Events,8,TempoQL,valid,,{name contains /Respiratory Rate/; scope = chartevents}
+Events,8,SQL,invalid,,"-- Retrieves all respiratory rate measurements from chartevents.
+-- The itemids selected correspond to various documented respiratory rates,
+-- including spontaneous, set (ventilator), and total rates.
+SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum
+FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+WHERE
+    ce.itemid IN (
+        220210, -- Respiratory Rate
+        224688, -- Respiratory Rate (Set)
+        224689, -- Respiratory Rate (spontaneous)
+        224690, -- Respiratory Rate (total)
+        224422  -- Respiratory Rate (Obser)
+    )"
+String Operations,8,TempoQL,valid,,{Diagnosis; scope = Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,8,SQL,valid,,"-- The user specified 'diabetes' but provided ICD codes for 'hypertension'.
+-- The query implements the logic for the provided codes as requested.
+WITH icu_diagnoses AS (
+    SELECT
+        icu.stay_id,
+        icu.outtime,
+        dx.icd_code,
+        dx.icd_version
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN
+        `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+        ON icu.hadm_id = dx.hadm_id
+)
+SELECT
+    id.stay_id,
+    id.outtime AS charttime,
+    id.icd_code,
+    id.icd_version,
+    d_dx.long_title,
+    REGEXP_CONTAINS(id.icd_code, r'^(401|402|403|404|405|I10|I11|I12|I13|I15)') AS is_diabetes_related
+FROM
+    icu_diagnoses AS id
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS d_dx
+    ON id.icd_code = d_dx.icd_code AND id.icd_version = d_dx.icd_version"
+Discretizing Observations,8,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,8,SQL,valid,,"WITH platelets AS (
+    -- Filter labevents to only platelet counts that occurred during an ICU stay
+    SELECT
+        icu.stay_id,
+        le.charttime,
+        le.valuenum
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+        ON icu.subject_id = le.subject_id
+        AND icu.hadm_id = le.hadm_id
+    WHERE
+        le.itemid = 51265 -- Platelet Count
+        AND le.charttime >= icu.intime AND le.charttime < icu.outtime
+)
+SELECT
+    p.stay_id,
+    p.charttime,
+    CASE
+        WHEN p.valuenum < 130 THEN 'Low'
+        WHEN p.valuenum >= 400 THEN 'High'
+        WHEN p.valuenum IS NOT NULL THEN 'Normal'
+        ELSE NULL
+    END AS value
+FROM platelets AS p"
+Patient-Level Aggregation,8,TempoQL,error,Exception occurred when processing variable 'None': min function requires exactly two arguments,min({Non Invasive Blood Pressure mean; scope = chartevents})
+Patient-Level Aggregation,8,SQL,invalid,,"-- Finds the minimum Non-Invasive Blood Pressure (NIBP) mean for each patient
+-- across all their ICU stays. If there are multiple occurrences of the minimum
+-- value, the earliest one is returned.
+SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum AS min_non_invasive_blood_pressure_mean
+FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    ON ce.stay_id = icu.stay_id
+WHERE
+    ce.itemid = 220181 -- Non Invasive Blood Pressure mean
+    AND ce.valuenum IS NOT NULL
+QUALIFY ROW_NUMBER() OVER (PARTITION BY icu.subject_id ORDER BY ce.valuenum ASC, ce.charttime ASC) = 1"
+Daily Aggregation,8,TempoQL,valid,,"(mean {Lactate; scope = Lab} from #now - 24 hours to #now)
+every 1 day from {Admit Time} to {Discharge Time}"
+Daily Aggregation,8,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [16:22]
+
+Location: US
+Job ID: 57c1269b-fd42-4ae8-a381-8233c5fecbc7
+","WITH stays AS (
+  SELECT
+    icu.stay_id,
+    icu.hadm_id,
+    icu.intime,
+    adm.dischtime
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+    ON icu.hadm_id = adm.hadm_id
+),
+daily_series AS (
+  SELECT
+    stay_id,
+    hadm_id,
+    day_timestamp
+  FROM stays, UNNEST(GENERATE_TIMESTAMP_ARRAY(stays.intime, stays.dischtime, INTERVAL 1 DAY)) AS day_timestamp
+),
+lactate_events AS (
+  SELECT
+    lab.hadm_id,
+    lab.charttime,
+    lab.valuenum
+  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS lab
+  INNER JOIN stays
+    ON lab.hadm_id = stays.hadm_id
+  WHERE
+    lab.itemid = 50813 -- Lactate
+    AND lab.valuenum IS NOT NULL
+    AND lab.charttime >= TIMESTAMP_SUB(stays.intime, INTERVAL 24 HOUR)
+    AND lab.charttime < stays.dischtime
+)
+SELECT
+  ds.stay_id,
+  ds.day_timestamp,
+  AVG(le.valuenum) AS avg_lactate_24hr
+FROM daily_series AS ds
+LEFT JOIN lactate_events AS le
+  ON ds.hadm_id = le.hadm_id
+  AND le.charttime >= TIMESTAMP_SUB(ds.day_timestamp, INTERVAL 24 HOUR)
+  AND le.charttime < ds.day_timestamp
+GROUP BY
+  ds.stay_id,
+  ds.day_timestamp
+ORDER BY
+  ds.stay_id,
+  ds.day_timestamp"
+Aggregation in Overlapping Intervals,8,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","(
+  min({
+    name in (""Non Invasive Blood Pressure mean"", ""Arterial Blood Pressure mean"");
+    scope = chartevents
+  } from #now - 8 hours to #now)
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,8,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [30:21]
+
+Location: US
+Job ID: b9dacca3-c062-42cc-a5f6-d29d6a4ec3c5
+","-- This query generates a time series for each ICU stay with 4-hour intervals.
+-- For each timestamp, it calculates the minimum mean blood pressure (MBP)
+-- from the preceding 8-hour window.
+WITH mbp_events AS (
+  -- First, select all relevant mean blood pressure measurements.
+  -- Pre-filter chartevents to the period from 8 hours before ICU admission
+  -- to ICU discharge to improve performance.
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS stays
+  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    ON stays.stay_id = ce.stay_id
+  WHERE
+    ce.itemid IN (
+      220052, -- Arterial Blood Pressure mean
+      220181  -- Non Invasive Blood Pressure mean
+    )
+    AND ce.charttime BETWEEN TIMESTAMP_SUB(stays.intime, INTERVAL 8 HOUR) AND stays.outtime
+    AND ce.valuenum IS NOT NULL
+),
+
+four_hour_grid AS (
+  -- Generate a timestamp every 4 hours for each ICU stay, from admission to discharge.
+  SELECT
+    stay_id,
+    timestamps AS charttime
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS timestamps
+)
+
+-- Left join the MBP events onto the time grid and calculate the minimum value.
+SELECT
+  grid.stay_id,
+  grid.charttime,
+  MIN(mbp.valuenum) AS min_mbp_preceding_8hr
+FROM four_hour_grid AS grid
+LEFT JOIN mbp_events AS mbp
+  ON grid.stay_id = mbp.stay_id
+  -- The lookback window is the 8 hours preceding the grid timestamp.
+  -- Lower bound is inclusive, upper bound is exclusive.
+  AND mbp.charttime >= TIMESTAMP_SUB(grid.charttime, INTERVAL 8 HOUR)
+  AND mbp.charttime < grid.charttime
+GROUP BY
+  grid.stay_id,
+  grid.charttime
+ORDER BY
+  grid.stay_id,
+  grid.charttime"
+Aggregating Existence at Event Times,8,TempoQL,valid,,"(
+  exists {Invasive Ventilation; scope = procedureevents} before #now
+)
+at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,8,SQL,invalid,,"-- This query assumes the user is referring to the `icu.procedureevents` table,
+-- as it is the standard source for timed procedural events like ventilation.
+WITH invasive_ventilation_events AS (
+  SELECT
+    icu.stay_id,
+    proc.starttime
+  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS proc
+  INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    ON proc.stay_id = icu.stay_id
+  WHERE
+    proc.itemid = 225792 -- d_items.label = 'Invasive Ventilation'
+    -- Filter to events within the ICU stay bounds
+    AND proc.starttime >= icu.intime AND proc.starttime < icu.outtime
+)
+SELECT
+  stay_id,
+  starttime,
+  (
+    LAG(starttime, 1) OVER (PARTITION BY stay_id ORDER BY starttime) IS NOT NULL
+  ) AS had_previous_event
+FROM invasive_ventilation_events
+ORDER BY
+  stay_id,
+  starttime"
+Rolling Difference,8,TempoQL,error,"Exception occurred when processing variable 'None': 'now' keyword can only be used within a time-series expression, ending with an 'at'/'every'/'at every' clause.",{Temperature Fahrenheit; scope = chartevents} - (mean {Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now)
+Rolling Difference,8,SQL,invalid,,"WITH temperature_events AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.valuenum,
+    AVG(ce.valuenum) OVER (
+      PARTITION BY ce.stay_id
+      ORDER BY UNIX_SECONDS(TIMESTAMP(ce.charttime))
+      -- 8 hours = 28800 seconds. The frame is the 8 hours preceding the current event.
+      RANGE BETWEEN 28800 PRECEDING AND 1 PRECEDING
+    ) AS avg_temp_last_8h
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  INNER JOIN `physionet-data.mimiciv_3_1_icu.d_items` AS di
+    ON ce.itemid = di.itemid
+  WHERE
+    di.label = 'Temperature Fahrenheit' AND ce.valuenum IS NOT NULL
+)
+SELECT
+  stay_id,
+  charttime,
+  valuenum - avg_temp_last_8h AS temperature_diff_from_8h_avg
+FROM temperature_events
+WHERE
+  avg_temp_last_8h IS NOT NULL"
+Imputing Missing Values,8,TempoQL,valid,,(mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now impute mean) every 4 hours from {Admit Time} to {Discharge Time}
+Imputing Missing Values,8,SQL,invalid,,"WITH
+  temperatures AS (
+    -- Select all temperature measurements and convert Celsius to Fahrenheit
+    -- itemid 223761: Temperature Fahrenheit
+    -- itemid 223762: Temperature Celsius
+    SELECT
+      stay_id,
+      charttime,
+      CASE
+        WHEN itemid = 223762 THEN (valuenum * 9 / 5) + 32
+        ELSE valuenum
+      END AS temp_f
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid IN (223761, 223762)
+      AND valuenum IS NOT NULL
+  ),
+  global_mean_temp AS (
+    -- Calculate the single global mean temperature for imputation
+    SELECT
+      AVG(temp_f) AS mean_temp_f
+    FROM
+      temperatures
+  ),
+  time_grid AS (
+    -- For each ICU stay, generate a timestamp every 4 hours.
+    -- The generated timestamp represents the END of the 4-hour window.
+    SELECT
+      icu.stay_id,
+      TIMESTAMP_ADD(window_start, INTERVAL 4 HOUR) AS charttime
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    CROSS JOIN
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          TIMESTAMP(icu.intime), TIMESTAMP(icu.outtime), INTERVAL 4 HOUR
+        )
+      ) AS window_start
+  ),
+  windowed_temps AS (
+    -- For each 4-hour window in the time grid, calculate the average temperature.
+    -- A LEFT JOIN ensures all windows are included, even if they have no measurements.
+    SELECT
+      grid.stay_id,
+      grid.charttime,
+      AVG(temp.temp_f) AS avg_temp
+    FROM
+      time_grid AS grid
+    LEFT JOIN
+      temperatures AS temp
+      ON
+        grid.stay_id = temp.stay_id
+        AND TIMESTAMP(temp.charttime) >= TIMESTAMP_SUB(grid.charttime, INTERVAL 4 HOUR)
+        AND TIMESTAMP(temp.charttime) < grid.charttime
+    GROUP BY
+      grid.stay_id,
+      grid.charttime
+  )
+SELECT
+  wt.stay_id,
+  wt.charttime,
+  -- If a window has no measurements (avg_temp is NULL), fill with the global mean.
+  COALESCE(wt.avg_temp, gmt.mean_temp_f) AS temperature
+FROM
+  windowed_temps AS wt
+CROSS JOIN
+  global_mean_temp AS gmt
+ORDER BY
+  wt.stay_id,
+  wt.charttime"
+Carrying Values Forward,8,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+) carry 2 days every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,8,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [19:21]
+
+Location: US
+Job ID: 96d744b6-bcf9-4646-a1b3-672473a850cf
+","WITH o2_device_events AS (
+  -- 1. Get all recorded O2 delivery device events from chartevents
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.value
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  WHERE
+    ce.itemid = 223834 -- O2 Delivery Device(s)
+    AND ce.value IS NOT NULL
+    AND ce.value != ''
+),
+icu_stay_grid AS (
+  -- 2. Create a 24-hour grid for each ICU stay from admission to discharge
+  SELECT
+    stay_id,
+    grid_time
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 24 HOUR)) AS grid_time
+),
+o2_device_at_grid_time AS (
+  -- 3. For each grid point, find the earliest O2 device event in the preceding 24 hours
+  SELECT
+    grid.stay_id,
+    grid.grid_time,
+    o2.value,
+    o2.charttime AS value_time
+  FROM icu_stay_grid AS grid
+  LEFT JOIN o2_device_events AS o2
+    ON grid.stay_id = o2.stay_id
+    AND o2.charttime >= TIMESTAMP_SUB(grid.grid_time, INTERVAL 24 HOUR)
+    AND o2.charttime < grid.grid_time
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY grid.stay_id, grid.grid_time ORDER BY o2.charttime ASC) = 1
+),
+carried_forward AS (
+  -- 4. Use window functions to carry forward the last observed value and its timestamp
+  SELECT
+    stay_id,
+    grid_time,
+    LAST_VALUE(value IGNORE NULLS) OVER (
+      PARTITION BY stay_id
+      ORDER BY grid_time
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS locf_value,
+    LAST_VALUE(value_time IGNORE NULLS) OVER (
+      PARTITION BY stay_id
+      ORDER BY grid_time
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS last_observed_time
+  FROM o2_device_at_grid_time
+)
+-- 5. Final selection, applying the 2-day (48-hour) carry-forward limit
+SELECT
+  cf.stay_id,
+  cf.grid_time AS charttime,
+  CASE
+    WHEN TIMESTAMP_DIFF(cf.grid_time, cf.last_observed_time, HOUR) <= 48
+      THEN cf.locf_value
+    ELSE NULL
+  END AS value
+FROM carried_forward AS cf
+ORDER BY
+  cf.stay_id,
+  cf.grid_time"
+Attributes,9,TempoQL,valid,,{Anchor Age} + (({Admit Time} - {Anchor Year}) as years)
+Attributes,9,SQL,valid,,"SELECT
+    icu.stay_id,
+    p.anchor_age + EXTRACT(YEAR FROM icu.intime) - p.anchor_year AS age
+FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.patients` AS p
+    ON icu.subject_id = p.subject_id"
+Events,9,TempoQL,valid,,"{scope = chartevents; name in (""Respiratory Rate"", ""Respiratory Rate (spontaneous)"", ""Respiratory Rate (Total)"")}"
+Events,9,SQL,invalid,,"-- Retrieve all respiratory rate measurements from chartevents
+-- The itemids are a combination of metavision and carevue itemids
+SELECT
+    stay_id,
+    charttime,
+    valuenum AS respiratory_rate
+FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents`
+WHERE
+    itemid IN (
+        -- Metavision
+        220210, -- Respiratory Rate
+        224688, -- Respiratory Rate (spontaneous)
+        224689, -- Respiratory Rate (total)
+        224690, -- Respiratory Rate (patient)
+        224691, -- Respiratory Rate (set)
+        -- CareVue
+        618, -- Respiratory Rate
+        615, -- Resp Rate (Total)
+        614, -- Resp Rate (Spont)
+        219 -- Respirations
+    )"
+String Operations,9,TempoQL,valid,,{Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,9,SQL,valid,,"SELECT
+  icu.stay_id,
+  icu.outtime AS charttime,
+  dx.icd_code,
+  dx.icd_version,
+  REGEXP_CONTAINS(dx.icd_code, r'^(401|402|403|404|405|I10|I11|I12|I13|I15)') AS is_diabetes_related
+FROM
+  `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN
+  `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+  ON icu.subject_id = dx.subject_id
+  AND icu.hadm_id = dx.hadm_id
+ORDER BY
+  icu.stay_id,
+  dx.seq_num"
+Discretizing Observations,9,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,9,SQL,valid,,"WITH platelet_itemid AS (
+  SELECT
+    itemid
+  FROM `physionet-data.mimiciv_3_1_hosp.d_labitems`
+  WHERE
+    label = 'Platelet Count'
+)
+, platelet_events AS (
+  SELECT
+    icu.stay_id
+    , le.charttime
+    , le.valuenum
+  FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+  INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    ON le.subject_id = icu.subject_id
+    AND le.hadm_id = icu.hadm_id
+  INNER JOIN platelet_itemid AS pi
+    ON le.itemid = pi.itemid
+  WHERE
+    le.charttime BETWEEN icu.intime AND icu.outtime
+)
+SELECT
+  stay_id
+  , charttime
+  , CASE
+      WHEN valuenum < 130
+        THEN 'Low'
+      WHEN valuenum >= 400
+        THEN 'High'
+      WHEN valuenum IS NOT NULL
+        THEN 'Normal'
+      ELSE NULL
+    END AS platelet_level
+FROM platelet_events"
+Patient-Level Aggregation,9,TempoQL,valid,,min {Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime
+Patient-Level Aggregation,9,SQL,invalid,,"WITH nibp_events AS (
+  SELECT
+    i.stay_id,
+    i.subject_id,
+    c.charttime,
+    c.valuenum
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS i
+  INNER JOIN
+    `physionet-data.mimiciv_3_1_icu.chartevents` AS c
+    ON i.stay_id = c.stay_id
+  WHERE
+    c.itemid = 220181 -- Non Invasive Blood Pressure mean
+    AND c.valuenum IS NOT NULL
+)
+SELECT
+  stay_id,
+  charttime,
+  valuenum AS min_non_invasive_blood_pressure_mean
+FROM
+  nibp_events
+QUALIFY
+  ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY valuenum ASC, charttime ASC) = 1"
+Daily Aggregation,9,TempoQL,valid,,"(mean {Lactate; scope = Lab} from #now - 24 hours to #now)
+  every 1 day from {Admit Time} to {Discharge Time}"
+Daily Aggregation,9,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [22:9]
+
+Location: US
+Job ID: 8a7d22b6-487a-4dc7-94c4-1bb1cd8dc93c
+","-- Calculate the average lactate for the preceding 24 hours for each day of a patient's stay,
+-- starting from ICU admission to hospital discharge.
+WITH
+  icu_admission_window AS (
+    SELECT
+      icu.stay_id,
+      icu.intime AS window_start,
+      adm.dischtime AS window_end,
+      icu.hadm_id
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+      ON icu.hadm_id = adm.hadm_id
+  ),
+  daily_series AS (
+    SELECT
+      iaw.stay_id,
+      iaw.hadm_id,
+      daily_timestamp
+    FROM
+      icu_admission_window AS iaw,
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          iaw.window_start, iaw.window_end, INTERVAL 1 DAY
+        )
+      ) AS daily_timestamp
+  ),
+  lactate_events AS (
+    SELECT
+      le.hadm_id,
+      le.charttime,
+      le.valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents` AS le
+    WHERE
+      le.itemid = 50813 -- Lactate
+      AND le.valuenum IS NOT NULL
+      AND le.hadm_id IN (SELECT hadm_id FROM icu_admission_window)
+  )
+SELECT
+  ds.stay_id,
+  ds.daily_timestamp AS timestamp,
+  AVG(le.valuenum) AS avg_lactate_preceding_24hr
+FROM daily_series AS ds
+LEFT JOIN lactate_events AS le
+  ON ds.hadm_id = le.hadm_id
+  AND le.charttime >= TIMESTAMP_SUB(ds.daily_timestamp, INTERVAL 24 HOUR)
+  AND le.charttime < ds.daily_timestamp
+GROUP BY
+  ds.stay_id,
+  ds.daily_timestamp
+ORDER BY
+  ds.stay_id,
+  ds.daily_timestamp;"
+Aggregation in Overlapping Intervals,9,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+","(
+  min(
+    {
+      name in (
+        ""Non Invasive Blood Pressure mean"",
+        ""Arterial Blood Pressure mean""
+      );
+      scope = chartevents
+    }
+    from #now - 8 hours to #now
+  )
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,9,SQL,error,"Reason: 400 Function not found: GENERATE_DATETIME_ARRAY; Did you mean generate_date_array? at [20:23]
+
+Location: US
+Job ID: 84a91715-814c-4926-a1fb-201dd9821df6
+","-- Generates a 4-hourly time series for each ICU stay and finds the minimum
+-- mean blood pressure (MBP) in the preceding 8-hour window.
+-- MBP is identified by itemids: 220052 (Arterial), 220181 (Non-invasive), 225312 (ART).
+WITH mbp_measurements AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (220052, 220181, 225312)
+    AND valuenum IS NOT NULL
+), time_grid AS (
+  SELECT
+    stay_id,
+    grid_time
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(GENERATE_DATETIME_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS grid_time
+)
+SELECT
+  tg.stay_id,
+  tg.grid_time AS charttime,
+  MIN(mbp.valuenum) AS min_mean_blood_pressure
+FROM
+  time_grid AS tg
+LEFT JOIN
+  mbp_measurements AS mbp
+  ON
+    tg.stay_id = mbp.stay_id
+    AND mbp.charttime >= DATETIME_SUB(tg.grid_time, INTERVAL 8 HOUR)
+    AND mbp.charttime < tg.grid_time
+GROUP BY
+  tg.stay_id,
+  tg.grid_time
+ORDER BY
+  tg.stay_id,
+  tg.grid_time;"
+Aggregating Existence at Event Times,9,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} before #now)
+  at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,9,SQL,invalid,,"-- This query identifies the start of invasive ventilation episodes. The user requested
+-- using the ""procedures"" table, but this table (procedures_icd) in MIMIC-IV only
+-- contains dates, not times, making it unsuitable for ordering events within a day.
+-- Instead, this query uses 'Intubated' events from chartevents as a reliable
+-- proxy for the start of an invasive ventilation episode, as these events are
+-- timestamped. A boolean flag indicates if an intubation is a re-intubation
+-- within the same ICU stay.
+WITH intubation_events AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  WHERE
+    ce.itemid = 224385 -- Intubation/Extubation
+    AND ce.value = 'Intubated'
+    AND ce.charttime IS NOT NULL
+),
+ranked_intubations AS (
+  SELECT
+    stay_id,
+    charttime,
+    ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY charttime) AS rn
+  FROM intubation_events
+)
+SELECT
+  ri.stay_id,
+  ri.charttime,
+  (ri.rn > 1) AS has_previous_invasive_vent
+FROM ranked_intubations AS ri
+ORDER BY
+  ri.stay_id,
+  ri.charttime"
+Rolling Difference,9,TempoQL,valid,,({Temperature Fahrenheit; scope = chartevents}) - (mean {Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now) at every {Temperature Fahrenheit; scope = chartevents}
+Rolling Difference,9,SQL,error,"Reason: 400 ORDER BY key must be numeric in a RANGE-based window with OFFSET PRECEDING or OFFSET FOLLOWING boundaries, but has type TIMESTAMP at [20:5]
+
+Location: US
+Job ID: baf61338-4835-4ba7-84d3-e06598d02faf
+","-- Get the difference between each temperature reading and the patient's 8-hour rolling average temperature
+WITH temp_events AS (
+  SELECT
+    icu.stay_id,
+    icu.subject_id,
+    ce.charttime,
+    ce.valuenum
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    ON icu.stay_id = ce.stay_id
+  WHERE
+    ce.itemid = 223761 -- Temperature Fahrenheit
+    AND ce.valuenum IS NOT NULL
+)
+SELECT
+  stay_id,
+  charttime,
+  valuenum - AVG(valuenum) OVER (
+    PARTITION BY subject_id
+    ORDER BY
+      CAST(charttime AS TIMESTAMP)
+    RANGE BETWEEN INTERVAL 8 HOUR PRECEDING
+    AND INTERVAL 1 SECOND PRECEDING
+  ) AS value
+FROM temp_events"
+Imputing Missing Values,9,TempoQL,valid,,"(
+  mean {Temperature Fahrenheit; scope = chartevents}
+  from #now - 4 hours to #now
+  impute mean
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Imputing Missing Values,9,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [25:5]
+
+Location: US
+Job ID: c932b754-2088-4906-a433-a42b28b9c3ad
+","WITH temp_events AS (
+  -- Filter chartevents for Temperature Fahrenheit measurements
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223761 -- Temperature Fahrenheit
+    AND valuenum IS NOT NULL
+),
+global_mean_temp AS (
+  -- Calculate the global mean temperature for imputation
+  SELECT
+    AVG(valuenum) AS avg_temp_all
+  FROM temp_events
+),
+time_grid AS (
+  -- Generate a 4-hour grid for each ICU stay from intime to outtime
+  SELECT
+    stay_id,
+    bucket_start
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  CROSS JOIN UNNEST(
+    GENERATE_TIMESTAMP_ARRAY(
+      intime,
+      outtime,
+      INTERVAL 4 HOUR
+    )
+  ) AS bucket_start
+),
+avg_temp_per_bucket AS (
+  -- Calculate the average temperature for each 4-hour bucket for each stay
+  SELECT
+    tg.stay_id,
+    tg.bucket_start,
+    AVG(te.valuenum) AS avg_temp_bucket
+  FROM time_grid AS tg
+  LEFT JOIN temp_events AS te
+    ON tg.stay_id = te.stay_id
+    -- The event must be within the 4-hour window starting at bucket_start
+    AND te.charttime >= tg.bucket_start
+    AND te.charttime < TIMESTAMP_ADD(tg.bucket_start, INTERVAL 4 HOUR)
+  GROUP BY
+    tg.stay_id,
+    tg.bucket_start
+)
+-- Final select, imputing missing bucket averages with the global mean
+SELECT
+  atb.stay_id,
+  atb.bucket_start AS charttime,
+  -- If a bucket has no temperature measurements, its average is NULL.
+  -- COALESCE replaces these NULLs with the pre-calculated global average.
+  COALESCE(atb.avg_temp_bucket, gmt.avg_temp_all) AS value
+FROM avg_temp_per_bucket AS atb
+CROSS JOIN global_mean_temp AS gmt
+ORDER BY
+  atb.stay_id,
+  atb.bucket_start"
+Carrying Values Forward,9,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,9,SQL,error,"Reason: 400 No matching signature for operator > for argument types: DATETIME, TIMESTAMP
+  Signature: T1 > T1
+    Unable to find common supertype for templated argument <T1>
+      Input types for <T1>: {TIMESTAMP, DATETIME} at [36:11]
+
+Location: US
+Job ID: 48b1f28d-e634-4e8d-83aa-6e444b318df0
+","WITH
+  o2_delivery_device AS (
+    SELECT
+      stay_id,
+      charttime,
+      value
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 223834  -- O2 Delivery Device(s)
+  ),
+  time_grid AS (
+    SELECT
+      stay_id,
+      generated_time
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          TIMESTAMP(intime), TIMESTAMP(outtime), INTERVAL 24 HOUR
+        )
+      ) AS generated_time
+  ),
+  windowed_o2 AS (
+    SELECT
+      tg.stay_id,
+      tg.generated_time,
+      o2.value,
+      o2.charttime AS value_charttime
+    FROM
+      time_grid AS tg
+    LEFT JOIN
+      o2_delivery_device AS o2
+      ON tg.stay_id = o2.stay_id
+      AND o2.charttime > TIMESTAMP_SUB(tg.generated_time, INTERVAL 24 HOUR)
+      AND o2.charttime <= tg.generated_time
+    QUALIFY
+      ROW_NUMBER()
+        OVER (PARTITION BY tg.stay_id, tg.generated_time ORDER BY o2.charttime ASC)
+      = 1
+  ),
+  locf_o2 AS (
+    SELECT
+      stay_id,
+      generated_time,
+      LAST_VALUE(value IGNORE NULLS)
+        OVER (
+          PARTITION BY stay_id
+          ORDER BY generated_time
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS carried_forward_value,
+      LAST_VALUE(value_charttime IGNORE NULLS)
+        OVER (
+          PARTITION BY stay_id
+          ORDER BY generated_time
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS last_value_time
+    FROM
+      windowed_o2
+  )
+SELECT
+  stay_id,
+  generated_time AS chart_time,
+  CASE
+    WHEN
+      TIMESTAMP_DIFF(generated_time, last_value_time, DAY) <= 2
+      THEN carried_forward_value
+    ELSE NULL
+  END AS value
+FROM
+  locf_o2
+ORDER BY
+  stay_id,
+  chart_time"
+Attributes,10,TempoQL,valid,,({Admit Time} - {Anchor Year}) as years + {Anchor Age}
+Attributes,10,SQL,valid,,"-- This query calculates the age of each patient at the time of their ICU admission.
+-- Age is calculated based on the patient's anchor_age and anchor_year from the patients table
+-- and the ICU admission time (intime) from the icustays table.
+SELECT
+    icu.stay_id,
+    icu.intime,
+    pat.anchor_age + DATETIME_DIFF(icu.intime, DATETIME(pat.anchor_year, 1, 1, 0, 0, 0), YEAR) AS age
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN `physionet-data.mimiciv_3_1_hosp.patients` AS pat
+    ON icu.subject_id = pat.subject_id"
+Events,10,TempoQL,valid,,"{name in (""Respiratory Rate"", ""Respiratory Rate (spontaneous)"", ""Respiratory Rate (Total)""); scope = chartevents}"
+Events,10,SQL,invalid,,"WITH rr_items AS (
+  SELECT
+    itemid,
+    label
+  FROM `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    itemid IN (
+      220210, -- Respiratory Rate
+      224690, -- Respiratory Rate (Total)
+      224689, -- Respiratory Rate (spontaneous)
+      224688  -- Respiratory Rate (Set)
+    )
+)
+SELECT
+  ce.stay_id,
+  ce.charttime,
+  ri.label,
+  ce.valueuom,
+  ce.valuenum AS value
+FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+INNER JOIN rr_items AS ri
+  ON ce.itemid = ri.itemid
+WHERE
+  ce.valuenum IS NOT NULL;"
+String Operations,10,TempoQL,valid,,{Diagnosis; scope = Diagnosis} startswith /(401|402|403|404|405|I10|I11|I12|I13|I15)/
+String Operations,10,SQL,valid,,"-- The user request specified 'diabetes' but provided ICD codes for hypertension.
+-- This query uses the provided ICD codes as requested.
+-- The ICD-9 prefixes are: 401, 402, 403, 404, 405
+-- The ICD-10 prefixes are: I10, I11, I12, I13, I15
+WITH icu_diagnoses AS (
+  SELECT
+    icu.stay_id,
+    icu.outtime,
+    dx.icd_code,
+    dx.icd_version
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  INNER JOIN
+    `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS dx
+    ON icu.subject_id = dx.subject_id AND icu.hadm_id = dx.hadm_id
+)
+SELECT
+  stay_id,
+  outtime AS timestamp,
+  icd_code,
+  icd_version,
+  (
+    (
+      icd_version = 9 AND SUBSTR(icd_code, 1, 3) IN ('401', '402', '403', '404', '405')
+    )
+    OR (
+      icd_version = 10
+      AND SUBSTR(icd_code, 1, 3) IN ('I10', 'I11', 'I12', 'I13', 'I15')
+    )
+  ) AS is_diabetes_related
+FROM icu_diagnoses"
+Discretizing Observations,10,TempoQL,valid,,"{Platelet Count; scope = Lab} cut bins [-inf, 130, 400, inf] named ['Low', 'Normal', 'High']"
+Discretizing Observations,10,SQL,valid,,"-- Extracts all Platelet Count observations for ICU patients,
+-- categorizing the numeric value into 'Low', 'Normal', or 'High'.
+-- Missing values are preserved as NULL.
+WITH platelet_events AS (
+  -- Filter labevents for platelet counts
+  SELECT
+    subject_id,
+    hadm_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_hosp.labevents`
+  WHERE
+    itemid = 51265 -- Platelet Count
+)
+SELECT
+  icu.stay_id,
+  pe.charttime,
+  CASE
+    WHEN pe.valuenum < 130 THEN 'Low'
+    WHEN pe.valuenum >= 400 THEN 'High'
+    WHEN pe.valuenum IS NOT NULL THEN 'Normal'
+    ELSE NULL
+  END AS value
+FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+INNER JOIN platelet_events AS pe
+  ON icu.subject_id = pe.subject_id
+  AND icu.hadm_id = pe.hadm_id
+-- Ensure the lab event occurred during the ICU stay
+WHERE
+  pe.charttime >= icu.intime AND pe.charttime < icu.outtime"
+Patient-Level Aggregation,10,TempoQL,error,"Unexpected end-of-input. Expected one of: 
+	* COLON
+",min({Non Invasive Blood Pressure mean; scope = chartevents} from #mintime to #maxtime)
+Patient-Level Aggregation,10,SQL,invalid,,"-- Retrieve the minimum 'Non Invasive Blood Pressure mean' for each patient's entire record.
+-- The returned stay_id corresponds to the ICU stay where this minimum value was recorded.
+-- In case of a tie for the minimum value, the earliest recorded event is chosen.
+SELECT
+    c.stay_id,
+    c.valuenum AS value
+FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS c
+INNER JOIN `ai-clinician.tempo_ql_scratch_mimic.icustays` AS s
+    ON c.stay_id = s.stay_id
+WHERE
+    c.itemid = 220181 -- Non Invasive Blood Pressure mean
+QUALIFY ROW_NUMBER() OVER (PARTITION BY s.subject_id ORDER BY c.valuenum ASC, c.charttime ASC) = 1"
+Daily Aggregation,10,TempoQL,valid,,(mean {Lactate; scope = Lab} from #now - 24 hours to #now) every 1 day from {Admit Time} to {Discharge Time}
+Daily Aggregation,10,SQL,invalid,,"WITH icu_admissions AS (
+    SELECT
+        icu.stay_id,
+        icu.hadm_id,
+        icu.intime,
+        adm.dischtime
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    INNER JOIN `physionet-data.mimiciv_3_1_hosp.admissions` AS adm
+        ON icu.subject_id = adm.subject_id AND icu.hadm_id = adm.hadm_id
+),
+daily_series AS (
+    SELECT
+        icu.stay_id,
+        icu.hadm_id,
+        calendar_day
+    FROM icu_admissions AS icu,
+    UNNEST(GENERATE_DATE_ARRAY(DATE(icu.intime), DATE(icu.dischtime), INTERVAL 1 DAY)) AS calendar_day
+),
+lactate_events AS (
+    SELECT
+        hadm_id,
+        charttime,
+        valuenum
+    FROM `physionet-data.mimiciv_3_1_hosp.labevents`
+    WHERE itemid = 50813 -- Lactate
+      AND valuenum IS NOT NULL
+)
+SELECT
+    ds.stay_id,
+    DATETIME(ds.calendar_day) AS measurement_date,
+    AVG(le.valuenum) AS avg_lactate_preceding_24h
+FROM daily_series AS ds
+LEFT JOIN lactate_events AS le
+    ON ds.hadm_id = le.hadm_id
+    AND le.charttime >= DATETIME_SUB(DATETIME(ds.calendar_day), INTERVAL 24 HOUR)
+    AND le.charttime < DATETIME(ds.calendar_day)
+GROUP BY
+    ds.stay_id,
+    ds.calendar_day
+ORDER BY
+    ds.stay_id,
+    measurement_date"
+Aggregation in Overlapping Intervals,10,TempoQL,valid,,"(
+  min {
+    id in (220181, 220052);
+    scope = chartevents
+  }
+  from #now - 8 hours to #now
+) every 4 hours from {Admit Time} to {Discharge Time}"
+Aggregation in Overlapping Intervals,10,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [6:23]
+
+Location: US
+Job ID: aafd27b1-2bd6-48ae-bf7d-7a48bacfb9f4
+","WITH hourly_grid AS (
+    SELECT
+        stay_id
+        , grid_time
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 4 HOUR)) AS grid_time
+),
+mbp_measurements AS (
+    SELECT
+        stay_id
+        , charttime
+        , valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE itemid IN (
+        220052, -- Arterial Blood Pressure mean
+        220181, -- Non Invasive Blood Pressure mean
+        225312  -- ART BP mean
+    )
+    AND valuenum IS NOT NULL
+)
+SELECT
+    hg.stay_id
+    , hg.grid_time AS charttime
+    , MIN(mbp.valuenum) AS min_mean_blood_pressure
+FROM hourly_grid AS hg
+LEFT JOIN mbp_measurements AS mbp
+    ON hg.stay_id = mbp.stay_id
+    AND mbp.charttime >= TIMESTAMP_SUB(hg.grid_time, INTERVAL 8 HOUR)
+    AND mbp.charttime < hg.grid_time
+GROUP BY
+    hg.stay_id
+    , hg.grid_time
+ORDER BY
+    hg.stay_id
+    , hg.grid_time"
+Aggregating Existence at Event Times,10,TempoQL,valid,,"(exists {Invasive Ventilation; scope = procedureevents} before #now)
+at every start({Invasive Ventilation; scope = procedureevents})"
+Aggregating Existence at Event Times,10,SQL,invalid,,"-- Identifies the start of invasive ventilation events based on ventilator mode
+-- settings in chartevents. An event is a continuous period of invasive ventilation,
+-- with gaps of less than 2 hours between measurements. The query assumes 'Invasive
+-- Ventilation' from the prompt refers to this concept, as there is no specific
+-- procedure with that name.
+WITH invasive_vent_events AS (
+    SELECT
+        stay_id,
+        charttime
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 223849 -- Ventilator Mode
+        AND value IS NOT NULL
+        AND value != ''
+        -- Exclude non-invasive and off modes to identify invasive ventilation
+        AND value NOT IN ('CPAP/BIPAP', 'Standby')
+),
+
+event_start_flags AS (
+    SELECT
+        stay_id,
+        charttime,
+        -- Flag a new event if it's the first record for the stay
+        -- or if the time gap from the previous record is > 2 hours.
+        CASE
+            WHEN
+                LAG(charttime, 1) OVER (
+                    PARTITION BY stay_id ORDER BY charttime
+                ) IS NULL
+                THEN 1
+            WHEN
+                DATETIME_DIFF(charttime, LAG(charttime, 1) OVER (
+                    PARTITION BY stay_id ORDER BY charttime
+                ), HOUR) > 2
+                THEN 1
+            ELSE 0
+        END AS is_new_event
+    FROM invasive_vent_events
+),
+
+event_groups AS (
+    SELECT
+        stay_id,
+        charttime,
+        -- Create a unique identifier for each contiguous ventilation event
+        SUM(is_new_event) OVER (
+            PARTITION BY stay_id ORDER BY charttime ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS event_id
+    FROM event_start_flags
+),
+
+event_starts AS (
+    SELECT
+        stay_id,
+        event_id,
+        MIN(charttime) AS starttime
+    FROM event_groups
+    GROUP BY
+        stay_id,
+        event_id
+)
+
+SELECT
+    stay_id,
+    starttime,
+    CASE
+        WHEN ROW_NUMBER() OVER (PARTITION BY stay_id ORDER BY starttime) > 1
+            THEN TRUE
+        ELSE FALSE
+    END AS previous_invasive_vent
+FROM event_starts"
+Rolling Difference,10,TempoQL,valid,,{Temperature Fahrenheit; scope = chartevents} - (mean {Temperature Fahrenheit; scope = chartevents} from #now - 8 hours to #now) at every {Temperature Fahrenheit; scope = chartevents}
+Rolling Difference,10,SQL,error,"Reason: 400 Window framing expression must be a literal or parameter at [19:19]
+
+Location: US
+Job ID: a9fbccb2-cdf8-4e90-9c47-19f059dde6ae
+","WITH temp_events AS (
+  SELECT
+    stay_id,
+    charttime,
+    valuenum
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223761 -- Temperature Fahrenheit
+    AND valuenum IS NOT NULL
+)
+SELECT
+  stay_id,
+  charttime,
+  valuenum - AVG(valuenum) OVER (
+    PARTITION BY
+      stay_id
+    ORDER BY
+      UNIX_SECONDS(CAST(charttime AS TIMESTAMP))
+    RANGE BETWEEN 8 * 3600 PRECEDING AND CURRENT ROW
+  ) AS value
+FROM temp_events"
+Imputing Missing Values,10,TempoQL,valid,,"(
+  mean {Temperature Fahrenheit; scope = chartevents} from #now - 4 hours to #now
+) impute mean every 4 hours from {Admit Time} to {Discharge Time}"
+Imputing Missing Values,10,SQL,invalid,,"WITH
+  temperature_events AS (
+    SELECT
+      stay_id,
+      charttime,
+      valuenum
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 223761
+  ),
+  global_mean_temp AS (
+    SELECT
+      AVG(valuenum) AS global_avg
+    FROM temperature_events
+  ),
+  time_series AS (
+    SELECT
+      s.stay_id,
+      TIMESTAMP_ADD(s.intime, INTERVAL (interval_num + 1) * 4 HOUR) AS chart_time
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS s,
+      UNNEST(
+        GENERATE_ARRAY(
+          0,
+          CAST(
+            CEIL(TIMESTAMP_DIFF(s.outtime, s.intime, SECOND) / (4.0 * 3600.0)) - 1
+            AS INT64
+          )
+        )
+      ) AS interval_num
+    WHERE
+      s.outtime > s.intime
+  ),
+  windowed_avg AS (
+    SELECT
+      ts.stay_id,
+      ts.chart_time,
+      AVG(te.valuenum) AS avg_temp_f
+    FROM time_series AS ts
+    LEFT JOIN
+      temperature_events AS te
+      ON ts.stay_id = te.stay_id
+      AND te.charttime >= TIMESTAMP_SUB(ts.chart_time, INTERVAL 4 HOUR)
+      AND te.charttime < ts.chart_time
+    GROUP BY
+      ts.stay_id,
+      ts.chart_time
+  )
+SELECT
+  wa.stay_id,
+  wa.chart_time,
+  COALESCE(wa.avg_temp_f, gmt.global_avg) AS temperature_fahrenheit
+FROM
+  windowed_avg AS wa,
+  global_mean_temp AS gmt
+ORDER BY
+  wa.stay_id,
+  wa.chart_time"
+Carrying Values Forward,10,TempoQL,error,boolean value of NA is ambiguous,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,10,SQL,error,"Reason: 400 Syntax error: Expected "")"" but got ""("" at [23:12]
+
+Location: US
+Job ID: be1a08f5-e0a8-41ba-bb8e-21eacb2c906e
+","WITH o2_device_events AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.value
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  WHERE
+    ce.itemid = 223834 -- O2 Delivery Device(s)
+    AND ce.value IS NOT NULL AND ce.value != ''
+),
+icustay_grid AS (
+  SELECT
+    icu.stay_id,
+    ts.chart_hour
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  CROSS JOIN
+    UNNEST(
+      GENERATE_TIMESTAMP_ARRAY(
+        TIMESTAMP_ADD(icu.intime, INTERVAL 24 HOUR),
+        icu.outtime,
+        INTERVAL 24 HOUR
+      )
+    ) AS ts(chart_hour)
+),
+o2_device_per_hour AS (
+  SELECT
+    ig.stay_id,
+    ig.chart_hour,
+    o2.value,
+    o2.charttime AS value_charttime
+  FROM icustay_grid AS ig
+  LEFT JOIN o2_device_events AS o2
+    ON ig.stay_id = o2.stay_id
+    AND o2.charttime >= TIMESTAMP_SUB(ig.chart_hour, INTERVAL 24 HOUR)
+    AND o2.charttime < ig.chart_hour
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY ig.stay_id, ig.chart_hour ORDER BY o2.charttime ASC) = 1
+),
+o2_device_carried AS (
+  SELECT
+    stay_id,
+    chart_hour,
+    LAST_VALUE(value IGNORE NULLS) OVER (
+      PARTITION BY stay_id ORDER BY chart_hour
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS last_value,
+    LAST_VALUE(value_charttime IGNORE NULLS) OVER (
+      PARTITION BY stay_id ORDER BY chart_hour
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS last_value_charttime
+  FROM o2_device_per_hour
+)
+SELECT
+  odc.stay_id,
+  odc.chart_hour,
+  CASE
+    WHEN TIMESTAMP_DIFF(odc.chart_hour, odc.last_value_charttime, HOUR) <= 48
+    THEN odc.last_value
+    ELSE NULL
+  END AS o2_delivery_device
+FROM o2_device_carried AS odc
+ORDER BY
+  odc.stay_id,
+  odc.chart_hour"

@@ -1,71 +1,70 @@
-from tempo_ql import GenericDataset, formats, QueryEngine, AIAssistant
+from tempo_ql import GenericDataset, formats, QueryEngine
+from tempo_ql.ai_assistant import AIAssistant
 import os
 import numpy as np
 import pandas as pd
 import time
 import pandas_gbq
 from pathlib import Path
-from queries import QUERIES, PROMPTS
-
-# Get comparison metrics between two DataFrames
-def compare_results(df, reference_df):
-    df_len = len(df)
-    reference_len = len(reference_df)
-    diff_with_reference = df_len - reference_len
-
-    len_equal = diff_with_reference == 0
-
-    if len_equal:
-        piecewise_comparison = (df == reference_df).tolist()
-        equal_num = sum(piecewise_comparison)
-        overall_equal = equal_num == df_len
-    else:
-        piecewise_comparison = None
-        equal_num = None
-        overall_equal = None
-    return len_equal, piecewise_comparison, equal_num, overall_equal
-
-# Compare TempoQL results
-def loop_compare_tempoql_results(df, tempoql_list, query_engine):
-    max_equal_num = -1
-    best_result = None
-    for reference_df in tempoql_list:
-        try:
-            reference_tempoql_result = query_engine.query(reference_df)
-            reference_tempoql_df = reference_tempoql_result.df[reference_tempoql_result.df.columns[-1]]
-        except Exception as e:
-            continue
-
-        len_equal, piecewise_comparison, equal_num, overall_equal = compare_results(df, reference_tempoql_df) 
-        if len_equal:
-            return len_equal, piecewise_comparison, equal_num, overall_equal
-        if equal_num is not None and equal_num > max_equal_num:
-            max_equal_num = equal_num
-            best_result = (len_equal, piecewise_comparison, equal_num, overall_equal)
-    return best_result if best_result is not None else (False, None, None, None)
-
-# Compare SQL results
-def loop_compare_sql_results(df, sql_list, project_id):
-    max_equal_num = -1
-    best_result = None
-    for reference_df in sql_list:
-        try:
-            reference_sql_result = pandas_gbq.read_gbq(reference_df, project_id=project_id)
-        except Exception as e:
-            continue
-        reference_sql_df = reference_sql_result[reference_sql_result.columns[-1]]
-        len_equal, piecewise_comparison, equal_num, overall_equal = compare_results(df, reference_sql_df)
-        if len_equal:
-            return len_equal, piecewise_comparison, equal_num, overall_equal
-        if equal_num is not None and equal_num > max_equal_num:
-            max_equal_num = equal_num
-            best_result = (len_equal, piecewise_comparison, equal_num, overall_equal)
-    return best_result if best_result is not None else (False, None, None, None)
+from queries import QUERIES
+import traceback
 
 # GCP project in which to run queries - make sure it has access to MIMIC-IV through physionet.org
 project_id = "ai-clinician"
 # name of a dataset within your project to store temporary results. Required if you plan to subset the data to run queries
 scratch_dataset = "ai-clinician.tempo_ql_scratch_mimic"
+# your Gemini API key for running LLM queries
+gemini_api_key = open('../gemini_key.txt').read().strip()
+
+
+# Get comparison metrics between two DataFrames
+def compare_results(df, reference_df, evaluate_by=None):
+    if len(df) != len(reference_df):
+        print("Lengths don't match")
+        return False   
+    if evaluate_by == "mean":
+        if np.abs(np.mean(df) - np.mean(reference_df)) >= 1e-3:
+            print("Means don't match", np.mean(df), "vs", np.mean(reference_df))
+            return False
+        print("Match!")
+        return True
+    elif evaluate_by == "counts":
+        if df.value_counts().to_dict() != reference_df.value_counts().to_dict():
+            print("Counts don't match")
+            return False
+        print("Match!")
+        return True
+    elif pd.api.types.is_numeric_dtype(reference_df.dtype) and (np.abs(df.values - reference_df.values) > 0.01).mean() > 0.1:
+        print((np.abs(df.values - reference_df.values) > 0.01).sum(), "values don't match")
+        return False
+    elif not pd.api.types.is_numeric_dtype(reference_df.dtype):
+        str_df = df.astype('string').fillna('')
+        str_reference_df = reference_df.astype('string').fillna('')
+        if (
+            not (str_df == str_reference_df).all()
+        ):
+            print("Values don't match", str_df.head(10), str_reference_df.head(10))
+            return False
+        print("Match!")
+        return True
+    print("Match!")
+    return True
+
+# Compare results to reference dataframes
+def loop_compare_results(df, allowed_results, evaluate_by=None):
+    return any(compare_results(df, reference, evaluate_by=evaluate_by) for reference in allowed_results)
+
+def get_sql_result_values(df, subset_ids):
+    print("getting result from", df)
+    sort_columns = [df.columns[0], df.columns[1]] if len(df.columns) > 2 and 'time' in df.columns[1].lower() else [df.columns[0]]
+    df = df.sort_values(sort_columns)
+    ids = df.iloc[:,0]
+    return df[ids.isin(subset_ids)].iloc[:,-1].reset_index(drop=True)
+
+def get_tempoql_result_values(result, subset_ids):
+    print("getting result from", result)
+    ids = result.get_ids()
+    return result.get_values()[ids.isin(subset_ids)].reset_index(drop=True)
 
 # Initialize query engine and variable store
 dataset = GenericDataset(f'bigquery://{project_id}', formats.mimiciv(), 
@@ -74,130 +73,144 @@ dataset.reset_trajectory_ids()
 
 query_engine = QueryEngine(dataset)
 
-all_patient_ids = query_engine.get_ids()
-
-gemini_api_key = None
-ai_assistant = AIAssistant(gemini_api_key=gemini_api_key)
+ai_assistant = AIAssistant(query_engine, api_key=gemini_api_key)
 
 # Create results directory if it doesn't exist
 results_dir = Path("LLM_results")
 results_dir.mkdir(exist_ok=True)
 
-if os.path.exists("LLM_performance_results.csv"):
-    results = pd.read_csv("LLM_performance_results.csv", index_col=0).to_dict(orient='record')
-else:
-    results = []
+results = []
 
-llm_comparison_metrics = []
+n_iterations = 10
 
-seeds = [123, 456, 789]
+# this is needed so that the ground-truth SQL queries still have a trajectory table to lookup
+all_ids = dataset.get_ids()
 
-for id_size in [1000, 5000, 10000, 50000]:
-    for i, seed in enumerate(seeds):
-        # sample trajectory IDs
-        print("Seed", seed)
-        np.random.seed(seed)
-        dataset.set_trajectory_ids(list(np.random.choice(all_patient_ids, size=id_size, replace=False)))
+# subset the trajectories for quicker evaluation (the queries will still be run over the entire dataset)
+np.random.seed(123)
+sample_ids = np.random.choice(all_ids, size=1000, replace=False)
+dataset.set_trajectory_ids(sample_ids)
+
+for i in range(n_iterations):       
+    print("Iteration", i) 
+
+    for query in QUERIES:
+        # if query["name"] not in  ("Aggregating Counts at Event Times", "Carrying Values Forward"): continue
+        print(query["name"])
         
-        for query in QUERIES:
-            # Create query-specific directory
+        try:
             query_dir = results_dir / query["name"]
             query_dir.mkdir(exist_ok=True)
-            
-            # Time TempoQL query with error handling
-            start_tempoql = time.time()
+
+            valid_tempoql = set([s.strip() for s in [query["tempoql"], *query["alternative_tempoql"]]])
+            valid_sql = set([query["sql"], *query["alternative_sql"]])
+            ground_truth_dir = query_dir / "ground_truth"
+            ground_truth_dir.mkdir(exist_ok=True)
+
+            allowed_results_files = list(ground_truth_dir.glob(f"allowed_result_*.csv"))
+            allowed_results = []
+
+            if allowed_results_files:
+                # Load allowed_results from ground_truth directory
+                for file in allowed_results_files:
+                    allowed_results.append(pd.read_csv(file, keep_default_na=False, na_values=['', " ", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "n/a", "nan", "null "]).iloc[:,0])
+            else:
+                # Compute allowed_results and save to ground_truth directory
+                allowed_results = [
+                    *[get_tempoql_result_values(query_engine.query(q), sample_ids)
+                        for q in valid_tempoql],
+                    *[get_sql_result_values(pandas_gbq.read_gbq(q, project_id=project_id), sample_ids)
+                        for q in valid_sql],
+                ]
+                for idx, result in enumerate(allowed_results):
+                    result.to_csv(ground_truth_dir / f"allowed_result_{idx}.csv", index=False)
+
             tempoql_error = None
-            tempoql_df = pd.DataFrame()
+            tempoql_values = None
             tempoql_query = None
+            tempoql_is_valid = False
+            tempoql_result = None
             
             try:
-                tempoql_query = ai_assistant.process_question(question=query["prompt"])['extracted_query']
-                tempoql_result = query_engine.query(tempoql_query)
-                tempoql_df = tempoql_result.df[tempoql_result.df.columns[-1]]
-                tempoql_time = time.time() - start_tempoql
-                    
+                answer = ai_assistant.process_question(question=query["prompt"])
+                tempoql_query = answer['extracted_query']
+                while not tempoql_query or not tempoql_query.strip():
+                    answer = ai_assistant.process_question(question=query["prompt"])
+                    tempoql_query = answer['extracted_query']
+                print("TEMPOQL:", tempoql_query)
+                if tempoql_query.strip() in valid_tempoql:
+                    # the query is identical to one that already exists
+                    tempoql_is_valid = True
+                else:
+                    tempoql_result = query_engine.query(tempoql_query)
+                    tempoql_values = get_tempoql_result_values(tempoql_result, sample_ids)
+                    tempoql_is_valid = tempoql_values is not None and loop_compare_results(tempoql_values, allowed_results, evaluate_by=query.get("evaluate_by"))
             except Exception as e:
-                tempoql_time = time.time() - start_tempoql
+                traceback.print_exc()
                 tempoql_error = str(e)
-                # Create error DataFrame
-                tempoql_df = pd.DataFrame({
-                    'error': [tempoql_error],
-                    'query': [tempoql_query if tempoql_query else "Failed to generate query"],
-                    'timestamp': [pd.Timestamp.now()]
-                })
             
-            # Time SQL query with error handling
-            start_sql = time.time()
-            sql_error = None
-            sql_df = pd.DataFrame()
-            sql_query = None
-            
-            try:
-                sql_query = ai_assistant.process_sql_question(question=query["prompt"]).get('extracted_query')
-                df = pandas_gbq.read_gbq(sql_query, project_id=project_id)
-                sql_df = df[df.columns[-1]]  # This is already a Series
-                sql_time = time.time() - start_sql
-                
-            except Exception as e:
-                sql_time = time.time() - start_sql
-                sql_error = str(e)
-                # Create error DataFrame
-                sql_df = pd.DataFrame({
-                    'error': [sql_error],
-                    'query': [sql_query if sql_query else "Failed to generate query"],
-                    'timestamp': [pd.Timestamp.now()]
-                })
-            
-            tempoql_list = [query["tempoql"]] + query["alternative_tempoql"]
-            sql_list = [query["sql"]] + query["alternative_sql"]
-            tempoql_len_equal, tempoql_piecewise_comparison, tempoql_equal_num, tempoql_overall_equal = loop_compare_tempoql_results(tempoql_df, tempoql_list, query_engine)
-            sql_len_equal, sql_piecewise_comparison, sql_equal_num, sql_overall_equal = loop_compare_sql_results(sql_df, sql_list, project_id)
-
             # Add comparison metrics to results
-            llm_comparison_metrics.append({
-                "query_name": query["name"],
-                "iteration": i + 1,
-                "tempoql_len_equal": tempoql_len_equal,
-                "sql_len_equal": sql_len_equal,
-                "tempoql_piecewise_comparison": tempoql_piecewise_comparison,
-                "sql_piecewise_comparison": sql_piecewise_comparison,
-                "tempoql_equal_num": tempoql_equal_num,
-                "sql_equal_num": sql_equal_num,
-                "tempoql_overall_equal": tempoql_overall_equal,
-                "sql_overall_equal": sql_overall_equal
-            })
-
-            # Save results to files
-            tempoql_filename = query_dir / f"tempoql_seed{seed}_size{id_size}.csv"
-            sql_filename = query_dir / f"sql_seed{seed}_size{id_size}.csv"
-            
-            tempoql_df.to_csv(tempoql_filename, index=False)
-            sql_df.to_csv(sql_filename, index=False)
-
-            # Add performance metrics to results
             results.append({
                 "query_name": query["name"],
                 "iteration": i + 1,
-                "tempoql_time": tempoql_time,
-                "sql_time": sql_time,
-                "tempoql_n_rows": len(tempoql_df),
-                "sql_n_rows": len(sql_df),
-                "tempoql_length": len(tempoql_df),
-                "sql_length": len(sql_df),
-                "id_size": id_size,
-                "seed": seed,
-                "tempoql_filename": str(tempoql_filename),
-                "sql_filename": str(sql_filename),
-                "tempoql_error": tempoql_error,
-                "sql_error": sql_error,
-                "tempoql_success": tempoql_error is None,
-                "sql_success": sql_error is None
+                "method": "TempoQL",
+                "result": "valid" if tempoql_is_valid else ("error" if tempoql_error is not None else "invalid"),
+                "error": tempoql_error,
+                "query": tempoql_query
             })
-            
-    # Save results after all iterations
-    pd.DataFrame(results).to_csv("LLM_performance_results.csv", index=False)
-    pd.DataFrame(llm_comparison_metrics).to_csv("LLM_comparison_metrics.csv", index=False)
+            if tempoql_is_valid:
+                valid_tempoql.add(tempoql_query.strip())
 
+            sql_error = None
+            sql_values = None
+            sql_query = None
+            sql_is_valid = False
+            sql_result = None
+            
+            try:
+                sql_query = ai_assistant.process_sql_question(question=query["prompt"]).get('extracted_query')
+                while not sql_query or not sql_query.strip():
+                    sql_query = ai_assistant.process_sql_question(question=query["prompt"]).get('extracted_query')
+                print("SQL:", sql_query)
+                if sql_query.strip() in valid_sql:
+                    # the query is identical to one that already exists
+                    sql_is_valid = True
+                else:
+                    sql_query = sql_query.replace("`physionet-data.mimiciv_3_1_icu.icustays`", "`ai-clinician.tempo_ql_scratch_mimic.icustays`")
+                    sql_result = pandas_gbq.read_gbq(sql_query, project_id=project_id)
+                    sql_values = get_sql_result_values(sql_result, sample_ids)
+                    sql_is_valid = sql_values is not None and loop_compare_results(sql_values, allowed_results, evaluate_by=query.get("evaluate_by"))
+            except Exception as e:
+                traceback.print_exc()
+                sql_error = str(e)
+            
+            # Add comparison metrics to results
+            results.append({
+                "query_name": query["name"],
+                "iteration": i + 1,
+                "method": "SQL",
+                "result": "valid" if sql_is_valid else ("error" if sql_error is not None else "invalid"),
+                "error": sql_error,
+                "query": sql_query
+            })
+            if sql_is_valid:
+                valid_sql.add(sql_query.strip())
+
+            # Save results to files
+            if tempoql_values is not None:
+                tempoql_filename = query_dir / f"tempoql_iteration{i}.csv"
+                tempoql_values.to_csv(tempoql_filename, index=False)
+                
+            if sql_values is not None:
+                sql_filename = query_dir / f"sql_iteration{i}.csv"
+                sql_values.to_csv(sql_filename, index=False)
+                
+            # Save results after all iterations
+            pd.DataFrame(results).to_csv("LLM_performance_results.csv", index=False)
+        except Exception as e:
+            with open("crash_log.txt", "a") as file:
+                file.write(f'skipped {query["name"]}, iteration {i}\n')
+                file.write(traceback.format_exc() + '\n\n')
 # Print summary
-print(f"\n✅ Results saved to: {results_dir.absolute()}")
-print(f"📊 Performance metrics saved to: LLM_performance_results.csv")
+print(f"\nResults saved to: {results_dir.absolute()}")
+print(f"Performance metrics saved to: LLM_performance_results.csv")

@@ -67,6 +67,7 @@ CUT_TYPE: /bins?/i|/quantiles?/i
     | comparison "=" agg_expr                    -> eq
     | comparison "BETWEEN"i agg_expr "AND"i agg_expr  -> between
     | comparison "CONTAINS"i agg_expr  -> contains
+    | comparison "MATCHES"i agg_expr  -> matches
     | comparison "STARTSWITH"i agg_expr  -> startswith
     | comparison "ENDSWITH"i agg_expr  -> endswith
     | comparison ("!="|"<>") agg_expr            -> ne
@@ -114,7 +115,7 @@ UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 ?data_element_query_el: /id|name|type|value|scope/i ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
     | /id|name|type|value|scope/i ("IN"i) value_list                       -> data_element_in
     | /id|name|type|value|scope/i PATTERN_CMD LITERAL -> data_element_pattern
-    | /(?!id|name|type|value|scope)[^};'"`]+/i -> data_element_query_basic
+    | /(?!id|name|type|value|scope)\w[^};'"`]+/i -> data_element_query_basic
     
 PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
 VAR_NAME: /(?!(and|or|not|case|when|else|in|then|every|at|from|to|with|as)\b)[A-Za-z][A-Za-z0-9_]*/ 
@@ -246,7 +247,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             raise ValueError(f"Unknown field specifier for data element query '{field}'")
         if field.lower() in ("value", "scope", "type"):
             raise ValueError(f"'in' queries cannot be used with '{field}' field specifier")
-        return {field.lower(): ("in", self.visit(value_spec))}
+        return {field.lower(): ("in", tuple(self.visit(value_spec)))}
     
     def data_element_pattern(self, tree):
         field, relation, value_spec = tree.children
@@ -506,12 +507,33 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def startswith(self, tree):
         base_items = self.visit(tree.children[0])
         strings = base_items.get_values().astype(str)
-        return base_items.with_values(strings.str.startswith(self.visit(tree.children[1])))
+        pat = self.visit(tree.children[1])
+        if isinstance(pat, re.Pattern):
+            new_values = strings.str.contains("^(?:" + pat.pattern.lstrip("^") + ")")
+        else:
+            new_values = strings.str.startswith(pat)
+        return base_items.with_values(new_values)
+        
     def endswith(self, tree):
         base_items = self.visit(tree.children[0])
         strings = base_items.get_values().astype(str)
-        return base_items.with_values(strings.str.endswith(self.visit(tree.children[1])))
+        pat = self.visit(tree.children[1])
+        if isinstance(pat, re.Pattern):
+            new_values = strings.str.contains("(?:" + pat.pattern.rstrip("$") + ")$")
+        else:
+            new_values = strings.str.endswith(pat)
+        return base_items.with_values(new_values)
     
+    def matches(self, tree):
+        base_items = self.visit(tree.children[0])
+        strings = base_items.get_values().astype(str)
+        pat = self.visit(tree.children[1])
+        if isinstance(pat, re.Pattern):
+            new_values = strings.str.contains("^(?:" + pat.pattern.lstrip("^").rstrip("$") + ")$")
+        else:
+            new_values = strings.str.contains("^(?:" + re.escape(pat) + ")$")
+        return base_items.with_values(new_values)
+
     def negate(self, tree): return ~self.visit(tree.children[0])
     
     def logical_and(self, tree): return (
