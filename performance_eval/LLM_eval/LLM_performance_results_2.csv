@@ -1,0 +1,939 @@
+query_name,iteration,method,result,error,query
+Aggregating Counts at Event Times,1,TempoQL,valid,,(count(start({Cardioversion/Defibrillation; scope = procedureevents})) from #now to #now + 24 hours) at every {Heart Rhythm; scope = chartevents}
+Aggregating Counts at Event Times,1,SQL,invalid,,"WITH
+  heart_rhythms AS (
+    SELECT
+      stay_id,
+      charttime
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 220048  -- Heart Rhythm
+  ),
+  cardio_defib_events AS (
+    SELECT
+      stay_id,
+      starttime
+    FROM
+      `physionet-data.mimiciv_3_1_icu.procedureevents`
+    WHERE
+      itemid IN (
+        225468,  -- Defibrillation
+        225469   -- Cardioversion
+      )
+  )
+SELECT
+  hr.stay_id,
+  hr.charttime,
+  COUNT(cde.starttime) AS cardioversion_defib_count_24hr
+FROM
+  heart_rhythms AS hr
+LEFT JOIN
+  cardio_defib_events AS cde
+    ON hr.stay_id = cde.stay_id
+    AND cde.starttime > hr.charttime
+    AND cde.starttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+  hr.stay_id,
+  hr.charttime"
+Carrying Values Forward,1,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+) carry 2 days every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,1,SQL,invalid,,"-- itemid 223834 is 'O2 Delivery Device(s)'
+WITH time_grid AS (
+  -- Create a 24-hour time grid for each ICU stay from admission to discharge
+  SELECT
+    stay_id,
+    generated_timestamp AS chart_time
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays`,
+    UNNEST(GENERATE_TIMESTAMP_ARRAY(TIMESTAMP(intime), TIMESTAMP(outtime), INTERVAL 24 HOUR)) AS generated_timestamp
+),
+o2_device_events AS (
+  -- Select all relevant O2 delivery device measurements
+  SELECT
+    stay_id,
+    charttime,
+    value
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 223834
+),
+daily_o2_values AS (
+  -- For each 24-hour window, find the earliest recorded O2 device value
+  SELECT
+    tg.stay_id,
+    tg.chart_time,
+    o2.value
+  FROM time_grid AS tg
+  LEFT JOIN o2_device_events AS o2
+    ON tg.stay_id = o2.stay_id
+      -- The event must fall within the 24-hour window starting at chart_time
+      AND TIMESTAMP(o2.charttime) >= tg.chart_time
+      AND TIMESTAMP(o2.charttime) < TIMESTAMP_ADD(tg.chart_time, INTERVAL 24 HOUR)
+  -- From all events in the window, pick the one with the earliest charttime
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tg.stay_id, tg.chart_time ORDER BY o2.charttime ASC) = 1
+),
+imputed_values AS (
+  -- Prepare for imputation by calculating the last known value and its timestamp for each row
+  SELECT
+    stay_id,
+    chart_time,
+    value,
+    -- Find the timestamp of the last recorded value using a running window
+    LAST_VALUE(
+      CASE WHEN value IS NOT NULL THEN chart_time END IGNORE NULLS
+    ) OVER (PARTITION BY stay_id ORDER BY chart_time) AS last_value_timestamp,
+    -- Carry forward the last recorded value using a running window
+    LAST_VALUE(value IGNORE NULLS) OVER (PARTITION BY stay_id ORDER BY chart_time) AS carried_value
+  FROM daily_o2_values
+)
+SELECT
+  stay_id,
+  chart_time,
+  CASE
+    -- If there's a value in the current window, use it
+    WHEN value IS NOT NULL
+      THEN value
+    -- If not, use the carried value, but only if the last measurement was within 2 days
+    WHEN TIMESTAMP_DIFF(chart_time, last_value_timestamp, DAY) <= 2
+      THEN carried_value
+    -- Otherwise, the value is NULL
+    ELSE NULL
+  END AS value
+FROM imputed_values
+ORDER BY stay_id, chart_time"
+Aggregating Counts at Event Times,2,TempoQL,valid,,"(count(start({Cardioversion/Defibrillation; scope = procedureevents})) from #now to #now + 24 hours)
+at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,2,SQL,invalid,,"WITH heart_rhythms AS (
+  SELECT
+    stay_id,
+    charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 220048 -- Heart Rhythm
+),
+cardio_defib_procedures AS (
+  SELECT
+    stay_id,
+    starttime
+  FROM `physionet-data.mimiciv_3_1_icu.procedureevents`
+  WHERE
+    itemid IN (
+      225464, -- Emergent Cardioversion
+      225465, -- Elective Cardioversion
+      223239  -- Defibrillation
+    )
+)
+SELECT
+  hr.stay_id,
+  hr.charttime,
+  COUNT(cdp.starttime) AS cardioversion_defib_count_24hr
+FROM heart_rhythms AS hr
+LEFT JOIN cardio_defib_procedures AS cdp
+  ON hr.stay_id = cdp.stay_id
+  AND cdp.starttime >= hr.charttime
+  AND cdp.starttime < DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+  hr.stay_id,
+  hr.charttime
+ORDER BY
+  hr.stay_id,
+  hr.charttime"
+Carrying Values Forward,2,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+) carry 2 days every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,2,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [17:5]
+
+Location: US
+Job ID: bdb2185d-955a-4cc3-bee5-1f8ae48c0fdd
+","-- This query generates a 24-hour time series for O2 delivery devices for each ICU stay.
+-- It finds the earliest recorded device in each 24-hour window starting from ICU admission.
+-- If a window has no recorded device, it carries forward the last known device for up to 2 days (48 hours).
+WITH icu_stays AS (
+  SELECT
+    stay_id,
+    intime,
+    outtime
+  FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+),
+time_grid AS (
+  SELECT
+    stay_id,
+    window_start
+  FROM icu_stays
+  CROSS JOIN UNNEST(
+    GENERATE_TIMESTAMP_ARRAY(
+      icu_stays.intime,
+      icu_stays.outtime,
+      INTERVAL 24 HOUR
+    )
+  ) AS window_start
+),
+o2_device_events AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.value
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  WHERE
+    ce.itemid = 223834 -- O2 Delivery Device(s)
+    AND ce.value IS NOT NULL
+),
+device_in_window AS (
+  SELECT
+    tg.stay_id,
+    tg.window_start,
+    o2.value
+  FROM time_grid AS tg
+  LEFT JOIN o2_device_events AS o2
+    ON tg.stay_id = o2.stay_id
+    AND o2.charttime >= tg.window_start
+    AND o2.charttime < TIMESTAMP_ADD(tg.window_start, INTERVAL 24 HOUR)
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tg.stay_id, tg.window_start ORDER BY o2.charttime ASC) = 1
+),
+carry_forward_setup AS (
+  SELECT
+    stay_id,
+    window_start,
+    value,
+    -- A counter that increments each time a non-null value is found, creating groups of consecutive nulls
+    COUNT(value) OVER (PARTITION BY stay_id ORDER BY window_start) AS value_group
+  FROM device_in_window
+),
+carry_forward_data AS (
+  SELECT
+    stay_id,
+    window_start,
+    value,
+    -- The first value in the group is the one to carry forward
+    FIRST_VALUE(value) OVER (PARTITION BY stay_id, value_group ORDER BY window_start) AS carried_value,
+    -- The timestamp of the value to be carried forward
+    MIN(window_start) OVER (PARTITION BY stay_id, value_group) AS source_timestamp
+  FROM carry_forward_setup
+)
+SELECT
+  stay_id,
+  window_start AS timestamp,
+  COALESCE(
+    value,
+    CASE
+      -- Only carry forward if the gap is 1 or 2 days
+      WHEN TIMESTAMP_DIFF(window_start, source_timestamp, DAY) BETWEEN 1 AND 2
+        THEN carried_value
+      ELSE NULL
+    END
+  ) AS o2_delivery_device
+FROM carry_forward_data
+ORDER BY
+  stay_id,
+  timestamp"
+Aggregating Counts at Event Times,3,TempoQL,valid,,"(count start({Cardioversion/Defibrillation; scope = procedureevents}) from #now to #now + 24 hours)
+    at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,3,SQL,invalid,,"-- For each Heart Rhythm observation, count the number of Cardioversion or
+-- Defibrillation procedures that occurred in the subsequent 24 hours.
+WITH heart_rhythms AS (
+    SELECT
+        stay_id,
+        charttime
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 220048 -- Heart Rhythm
+),
+
+procedures AS (
+    SELECT
+        stay_id,
+        starttime
+    FROM `physionet-data.mimiciv_3_1_icu.inputevents`
+    WHERE
+        itemid IN (
+            -- Cardioversion
+            225792, -- Cardioversion #1
+            225793, -- Cardioversion #2
+            225794, -- Cardioversion #3
+            225795, -- Cardioversion #4
+            -- Defibrillation
+            225799, -- Defibrillation #1
+            225800, -- Defibrillation #2
+            225801, -- Defibrillation #3
+            225802 -- Defibrillation #4
+        )
+)
+
+SELECT
+    hr.stay_id,
+    hr.charttime,
+    COUNT(proc.starttime) AS procedure_count_next_24h
+FROM heart_rhythms AS hr
+LEFT JOIN procedures AS proc
+    ON hr.stay_id = proc.stay_id
+    AND proc.starttime > hr.charttime
+    AND proc.starttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+    hr.stay_id,
+    hr.charttime"
+Carrying Values Forward,3,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,3,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [18:14]
+
+Location: US
+Job ID: 50a9c94f-5a4c-4297-9e12-a1894e6b86ae
+","WITH
+  o2_events AS (
+    SELECT
+      ce.stay_id,
+      ce.charttime,
+      ce.value
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    WHERE
+      ce.itemid = 223834  -- O2 Delivery Device(s)
+      AND ce.value IS NOT NULL
+      AND ce.value != ''
+  ),
+  time_grid AS (
+    SELECT
+      icu.stay_id,
+      grid_time
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu,
+      UNNEST(GENERATE_TIMESTAMP_ARRAY(icu.intime, icu.outtime, INTERVAL 24 HOUR)) AS grid_time
+  ),
+  recent_values AS (
+    SELECT
+      t.stay_id,
+      t.grid_time,
+      o2.value,
+      o2.charttime
+    FROM time_grid AS t
+    LEFT JOIN o2_events AS o2
+      ON t.stay_id = o2.stay_id
+      AND o2.charttime > TIMESTAMP_SUB(t.grid_time, INTERVAL 24 HOUR)
+      AND o2.charttime <= t.grid_time
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY t.stay_id, t.grid_time ORDER BY o2.charttime ASC, o2.value ASC) = 1
+  ),
+  last_known_values AS (
+    SELECT
+      t.stay_id,
+      t.grid_time,
+      o2.value,
+      o2.charttime
+    FROM time_grid AS t
+    LEFT JOIN o2_events AS o2
+      ON t.stay_id = o2.stay_id AND o2.charttime <= t.grid_time
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY t.stay_id, t.grid_time ORDER BY o2.charttime DESC, o2.value ASC) = 1
+  )
+SELECT
+  r.stay_id,
+  r.grid_time,
+  CASE
+    WHEN r.value IS NOT NULL
+    THEN r.value
+    WHEN l.charttime > TIMESTAMP_SUB(r.grid_time, INTERVAL 2 DAY)
+    THEN l.value
+    ELSE NULL
+  END AS value
+FROM recent_values AS r
+LEFT JOIN last_known_values AS l
+  ON r.stay_id = l.stay_id AND r.grid_time = l.grid_time
+ORDER BY
+  r.stay_id,
+  r.grid_time"
+Aggregating Counts at Event Times,4,TempoQL,valid,,"(count(start({Cardioversion/Defibrillation; scope = procedureevents})) from #now to #now + 24 hours)
+at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,4,SQL,invalid,,"-- Find all ""Heart Rhythm"" chart events
+-- For each, count the number of ""Cardioversion"" or ""Defibrillation"" events
+-- that occur within the subsequent 24 hours for the same ICU stay.
+WITH heart_rhythm_events AS (
+  SELECT
+    stay_id,
+    charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid = 220048  -- Heart Rhythm
+),
+defib_cardioversion_events AS (
+  SELECT
+    stay_id,
+    charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (
+      224288,  -- Defibrillation
+      224289   -- Cardioversion
+    )
+)
+SELECT
+  hr.stay_id,
+  hr.charttime,
+  (
+    SELECT
+      COUNT(dce.charttime)
+    FROM defib_cardioversion_events AS dce
+    WHERE
+      dce.stay_id = hr.stay_id
+      AND dce.charttime > hr.charttime
+      AND dce.charttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+  ) AS cardioversion_defib_count
+FROM heart_rhythm_events AS hr"
+Carrying Values Forward,4,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+  carry 2 days
+) every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,4,SQL,invalid,,"WITH
+  o2_device_item AS (
+    SELECT
+      itemid
+    FROM
+      `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+      label = 'O2 Delivery Device(s)'
+    LIMIT 1
+  ),
+  o2_events AS (
+    SELECT
+      ch.stay_id,
+      CAST(ch.charttime AS TIMESTAMP) AS charttime,
+      ch.value
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents` AS ch
+      INNER JOIN o2_device_item AS it ON ch.itemid = it.itemid
+    WHERE
+      ch.value IS NOT NULL AND ch.value != ''
+  ),
+  time_grid AS (
+    SELECT
+      icu.stay_id,
+      timestamps AS chart_day
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu,
+      UNNEST(
+        GENERATE_TIMESTAMP_ARRAY(
+          CAST(icu.intime AS TIMESTAMP), CAST(icu.outtime AS TIMESTAMP), INTERVAL 24 HOUR
+        )
+      ) AS timestamps
+  ),
+  daily_o2_values AS (
+    SELECT
+      tg.stay_id,
+      tg.chart_day,
+      o2.value
+    FROM
+      time_grid AS tg
+      LEFT JOIN o2_events AS o2 ON tg.stay_id = o2.stay_id
+      AND o2.charttime >= tg.chart_day
+      AND o2.charttime < TIMESTAMP_ADD(tg.chart_day, INTERVAL 24 HOUR)
+    QUALIFY
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          tg.stay_id,
+          tg.chart_day
+        ORDER BY
+          o2.charttime ASC
+      ) = 1
+  ),
+  locf AS (
+    SELECT
+      stay_id,
+      chart_day,
+      value,
+      LAST_VALUE(value IGNORE NULLS) OVER (
+        PARTITION BY
+          stay_id
+        ORDER BY
+          chart_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS locf_value,
+      LAST_VALUE(
+        CASE
+          WHEN value IS NOT NULL THEN chart_day
+        END IGNORE NULLS
+      ) OVER (
+        PARTITION BY
+          stay_id
+        ORDER BY
+          chart_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS locf_timestamp
+    FROM
+      daily_o2_values
+  )
+SELECT
+  locf.stay_id,
+  locf.chart_day,
+  CASE
+    WHEN TIMESTAMP_DIFF(locf.chart_day, locf.locf_timestamp, HOUR) <= 48 THEN locf.locf_value
+    ELSE NULL
+  END AS value
+FROM
+  locf
+ORDER BY
+  locf.stay_id,
+  locf.chart_day"
+Aggregating Counts at Event Times,5,TempoQL,valid,,(count start({Cardioversion/Defibrillation; scope = procedureevents}) from #now to #now + 24 hours) at every {Heart Rhythm; scope = chartevents}
+Aggregating Counts at Event Times,5,SQL,valid,,"WITH heart_rhythm_items AS (
+  SELECT
+    itemid
+  FROM `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label = 'Heart Rhythm'
+), cardioversion_defib_items AS (
+  SELECT
+    itemid
+  FROM `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    LOWER(label) LIKE '%cardioversion%'
+    OR LOWER(label) LIKE '%defibrillation%'
+), heart_rhythm_events AS (
+  SELECT
+    stay_id,
+    charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (
+      SELECT itemid FROM heart_rhythm_items
+    )
+), cardioversion_defib_events AS (
+  SELECT
+    stay_id,
+    charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+  WHERE
+    itemid IN (
+      SELECT itemid FROM cardioversion_defib_items
+    )
+)
+SELECT
+  hre.stay_id,
+  hre.charttime,
+  (
+    SELECT
+      COUNT(*)
+    FROM cardioversion_defib_events AS cde
+    WHERE
+      cde.stay_id = hre.stay_id
+      AND cde.charttime > hre.charttime
+      AND cde.charttime <= DATETIME_ADD(hre.charttime, INTERVAL 24 HOUR)
+  ) AS cardioversion_defib_count_in_24_hours
+FROM heart_rhythm_events AS hre"
+Carrying Values Forward,5,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,5,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [8:25]
+
+Location: US
+Job ID: f5d76f1e-3c93-41d1-8f73-c324ae00c7a6
+","WITH
+  time_grid AS (
+    SELECT
+      stay_id,
+      bucket_time
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays`
+      CROSS JOIN UNNEST(GENERATE_TIMESTAMP_ARRAY(intime, outtime, INTERVAL 24 HOUR)) AS bucket_time
+  ),
+  bucketed_o2_events AS (
+    SELECT
+      icu.stay_id,
+      TIMESTAMP_ADD(
+        icu.intime,
+        INTERVAL 24 * DIV(TIMESTAMP_DIFF(ce.charttime, icu.intime, HOUR), 24) HOUR
+      ) AS bucket_time,
+      ce.value
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+      INNER JOIN `physionet-data.mimiciv_3_1_icu.chartevents` AS ce ON icu.stay_id = ce.stay_id
+      INNER JOIN
+        `physionet-data.mimiciv_3_1_icu.d_items` AS di
+        ON ce.itemid = di.itemid AND di.label = 'O2 Delivery Device(s)'
+    WHERE
+      ce.charttime >= icu.intime AND ce.charttime < icu.outtime
+    QUALIFY
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          icu.stay_id,
+          TIMESTAMP_ADD(
+            icu.intime,
+            INTERVAL 24 * DIV(TIMESTAMP_DIFF(ce.charttime, icu.intime, HOUR), 24) HOUR
+          )
+        ORDER BY
+          ce.charttime ASC
+      )
+      = 1
+  ),
+  grid_with_values AS (
+    SELECT
+      tg.stay_id,
+      tg.bucket_time,
+      be.value
+    FROM
+      time_grid AS tg
+      LEFT JOIN
+        bucketed_o2_events AS be ON tg.stay_id = be.stay_id AND tg.bucket_time = be.bucket_time
+  ),
+  carry_forward AS (
+    SELECT
+      stay_id,
+      bucket_time,
+      LAST_VALUE(value IGNORE NULLS) OVER (
+        PARTITION BY stay_id
+        ORDER BY
+          bucket_time
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS last_value,
+      LAST_VALUE(CASE WHEN value IS NOT NULL THEN bucket_time END IGNORE NULLS) OVER (
+        PARTITION BY stay_id
+        ORDER BY
+          bucket_time
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS last_value_time
+    FROM
+      grid_with_values
+  )
+SELECT
+  stay_id,
+  bucket_time,
+  CASE
+    WHEN TIMESTAMP_DIFF(bucket_time, last_value_time, HOUR) <= 48
+      THEN last_value
+    ELSE NULL
+  END AS value
+FROM
+  carry_forward
+ORDER BY
+  stay_id,
+  bucket_time"
+Aggregating Counts at Event Times,6,TempoQL,valid,,(count(start({Cardioversion/Defibrillation; scope = procedureevents})) from #now to #now + 24 hours) at every {Heart Rhythm; scope = chartevents}
+Aggregating Counts at Event Times,6,SQL,invalid,,"-- For each Heart Rhythm chart event, count subsequent Cardioversion/Defibrillation events
+-- within a 24-hour window.
+-- Step 1: Identify all occurrences of 'Heart Rhythm' being charted.
+-- Step 2: Identify all occurrences of 'Cardioversion' or 'Defibrillation' events.
+-- Step 3: Use a correlated subquery to count the events from step 2 that fall
+--         within 24 hours after each event from step 1 for the same ICU stay.
+
+WITH heart_rhythms AS (
+    SELECT
+        stay_id,
+        charttime
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 220048 -- Heart Rhythm
+),
+cardio_defib_events AS (
+    SELECT
+        stay_id,
+        charttime
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid IN (
+            220268, -- Cardioversion
+            220269, -- Defibrillation
+            224736, -- Cardioversion #1
+            224737, -- Cardioversion #2
+            224738, -- Cardioversion #3
+            224739, -- Cardioversion #4
+            224740, -- Cardioversion #5
+            227099, -- Cardioversion
+            227364  -- Cardioversion
+        )
+)
+SELECT
+    hr.stay_id,
+    hr.charttime,
+    (
+        SELECT COUNT(*)
+        FROM cardio_defib_events AS cde
+        WHERE
+            cde.stay_id = hr.stay_id
+            AND cde.charttime >= hr.charttime
+            AND cde.charttime < DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+    ) AS cardioversion_defib_count_24hr
+FROM heart_rhythms AS hr"
+Carrying Values Forward,6,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+)
+carry 2 days
+every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,6,SQL,error,"Reason: 400 Syntax error: Expected "")"" but got ""("" at [35:9]
+
+Location: US
+Job ID: e0339a51-a05b-4376-9630-bfba71be98a1
+","WITH o2_device_item AS (
+  -- Find the itemid for the O2 delivery device
+  SELECT
+    itemid
+  FROM
+    `physionet-data.mimiciv_3_1_icu.d_items`
+  WHERE
+    label = 'O2 Delivery Device(s)'
+), o2_events AS (
+  -- Retrieve all chart events for the O2 delivery device
+  SELECT
+    ce.stay_id,
+    ce.charttime,
+    ce.value
+  FROM
+    `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  INNER JOIN
+    o2_device_item AS di
+    ON ce.itemid = di.itemid
+  WHERE
+    ce.value IS NOT NULL AND ce.value != ''
+), time_series AS (
+  -- Generate a 24-hour time grid for each ICU stay
+  SELECT
+    icu.stay_id,
+    icu.outtime,
+    TIMESTAMP_ADD(TIMESTAMP(icu.intime), INTERVAL CAST(t.offset_24h AS INT64) * 24 HOUR) AS window_end_time
+  FROM
+    `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  CROSS JOIN UNNEST(
+    GENERATE_ARRAY(
+      1,
+      CAST(CEIL(TIMESTAMP_DIFF(TIMESTAMP(icu.outtime), TIMESTAMP(icu.intime), HOUR) / 24.0) AS INT64)
+    )
+  ) AS t(offset_24h)
+), windowed_o2_values AS (
+  -- For each 24-hour window, find the earliest recorded O2 device value
+  SELECT
+    ts.stay_id,
+    ts.window_end_time,
+    o2.value
+  FROM
+    time_series AS ts
+  LEFT JOIN
+    o2_events AS o2
+    ON ts.stay_id = o2.stay_id
+    AND o2.charttime >= TIMESTAMP_SUB(ts.window_end_time, INTERVAL 24 HOUR)
+    AND o2.charttime < ts.window_end_time
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY ts.stay_id, ts.window_end_time ORDER BY o2.charttime ASC) = 1
+), forward_filled_values AS (
+  -- Carry forward the last known value for windows with no new data
+  SELECT
+    stay_id,
+    window_end_time,
+    -- The last non-null value, carried forward
+    LAST_VALUE(value IGNORE NULLS) OVER (
+      PARTITION BY
+        stay_id
+      ORDER BY
+        window_end_time
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS carried_value,
+    -- The timestamp associated with the last non-null value
+    LAST_VALUE(
+      CASE
+        WHEN value IS NOT NULL THEN window_end_time
+      END IGNORE NULLS
+    ) OVER (
+      PARTITION BY
+        stay_id
+      ORDER BY
+        window_end_time
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS carried_value_time
+  FROM
+    windowed_o2_values
+)
+-- Final selection, applying the 2-day (48-hour) carry-forward limit
+SELECT
+  ffv.stay_id,
+  ffv.window_end_time AS charttime,
+  CASE
+    -- If the last known value is within 48 hours, use it
+    WHEN TIMESTAMP_DIFF(ffv.window_end_time, ffv.carried_value_time, HOUR) <= 48
+      THEN ffv.carried_value
+    ELSE NULL
+  END AS value
+FROM
+  forward_filled_values AS ffv
+INNER JOIN
+  `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+  ON ffv.stay_id = icu.stay_id
+-- Ensure the start of the window is before the patient's discharge time
+WHERE
+  TIMESTAMP_SUB(ffv.window_end_time, INTERVAL 24 HOUR) < TIMESTAMP(icu.outtime)
+ORDER BY
+  ffv.stay_id,
+  ffv.window_end_time"
+Aggregating Counts at Event Times,7,TempoQL,valid,,"(count start({Cardioversion/Defibrillation; scope = procedureevents}) from #now to #now + 24 hours)
+    at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,7,SQL,invalid,,"WITH
+  heart_rhythm_events AS (
+    SELECT
+      stay_id,
+      charttime
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 220048 -- Heart Rhythm
+  ),
+  cardioversion_events AS (
+    SELECT
+      stay_id,
+      charttime
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid IN (
+        220949, -- Cardioversion
+        225792, -- Cardioversion/Defibrillation
+        228221 -- Cardioversion/Defibrillation
+      )
+  )
+SELECT
+  hr.stay_id,
+  hr.charttime,
+  COUNT(cv.charttime) AS value
+FROM
+  heart_rhythm_events AS hr
+LEFT JOIN
+  cardioversion_events AS cv
+  ON hr.stay_id = cv.stay_id
+  AND cv.charttime > hr.charttime
+  AND cv.charttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+  hr.stay_id,
+  hr.charttime"
+Carrying Values Forward,7,TempoQL,error,Exception occurred when processing variable 'None': carry_forward_duration,"(first {O2 Delivery Device(s); scope = chartevents} from #now - 24 hours to #now)
+every 24 hours from {Admit Time} to {Discharge Time}
+carry 2 days"
+Carrying Values Forward,7,SQL,error,"Reason: 400 Function not found: GENERATE_DATETIME_ARRAY; Did you mean generate_date_array? at [28:16]
+
+Location: US
+Job ID: fd0a7547-13a7-4b13-8be9-5d150c5154fa
+","WITH o2_device_items AS (
+    SELECT
+        itemid
+    FROM
+        `physionet-data.mimiciv_3_1_icu.d_items`
+    WHERE
+        label = 'O2 Delivery Device(s)'
+),
+o2_events AS (
+    SELECT
+        stay_id,
+        charttime,
+        value
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid IN (SELECT itemid FROM o2_device_items)
+        AND value IS NOT NULL
+        AND value != ''
+),
+time_grid AS (
+    SELECT
+        stay_id,
+        grid_time
+    FROM
+        `ai-clinician.tempo_ql_scratch_mimic.icustays`
+    CROSS JOIN
+        UNNEST(GENERATE_DATETIME_ARRAY(intime, outtime, INTERVAL 1 DAY)) AS grid_time
+),
+daily_o2_values AS (
+    SELECT
+        tg.stay_id,
+        tg.grid_time,
+        o2.value
+    FROM
+        time_grid AS tg
+    LEFT JOIN
+        o2_events AS o2
+        ON tg.stay_id = o2.stay_id
+        AND o2.charttime >= DATETIME_SUB(tg.grid_time, INTERVAL 24 HOUR)
+        AND o2.charttime < tg.grid_time
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY tg.stay_id, tg.grid_time ORDER BY o2.charttime ASC) = 1
+),
+forward_fill_prep AS (
+    SELECT
+        stay_id,
+        grid_time,
+        LAST_VALUE(value IGNORE NULLS) OVER (
+            PARTITION BY stay_id ORDER BY grid_time
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS last_value,
+        LAST_VALUE(
+            CASE WHEN value IS NOT NULL THEN grid_time END IGNORE NULLS
+        ) OVER (
+            PARTITION BY stay_id ORDER BY grid_time
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS last_value_time
+    FROM
+        daily_o2_values
+)
+SELECT
+    stay_id,
+    grid_time AS charttime,
+    CASE
+        WHEN DATETIME_DIFF(grid_time, last_value_time, DAY) <= 2 THEN last_value
+        ELSE NULL
+    END AS value
+FROM
+    forward_fill_prep
+ORDER BY
+    stay_id,
+    charttime"
+Aggregating Counts at Event Times,8,TempoQL,valid,,"(count start({Cardioversion/Defibrillation; scope = procedureevents}) from #now to #now + 24 hours)
+at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,8,SQL,invalid,,"-- Finds every 'Heart Rhythm' chart event and counts the number of
+-- 'Cardioversion' or 'Defibrillation' events within the subsequent 24 hours.
+WITH heart_rhythm_events AS (
+    SELECT
+        stay_id,
+        charttime
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid = 220048 -- Heart Rhythm
+),
+
+cardioversion_events AS (
+    SELECT
+        stay_id,
+        charttime
+    FROM
+        `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+        itemid IN (
+            225464, -- Defibrillator
+            225465, -- Cardioversion
+            227364  -- Defib/Cardioversion
+        )
+)
+
+SELECT
+    hr.stay_id,
+    hr.charttime,
+    COUNT(cv.charttime) AS cardioversion_defib_count_next_24hr
+FROM
+    heart_rhythm_events AS hr
+LEFT JOIN
+    cardioversion_events AS cv
+    ON hr.stay_id = cv.stay_id
+    -- The cardioversion event must happen after the heart rhythm event
+    AND cv.charttime > hr.charttime
+    -- And within the 24-hour window following the heart rhythm event
+    AND cv.charttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+    hr.stay_id,
+    hr.charttime
+ORDER BY
+    hr.stay_id,
+    hr.charttime;"

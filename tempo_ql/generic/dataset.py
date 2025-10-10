@@ -166,9 +166,12 @@ class GenericDataset:
             return o
             
         return json.dumps([
-            sanitize({k: v for k, v in table.items() if k not in ("id_field", "start_time_field", "end_time_field", "time_field")})
+            sanitize({
+                **table,
+                **({"join": self.id_field_joins[table['source']]} if 'source' in table and table['source'] in self.id_field_joins else {})
+            })
             for table in self.tables
-        ])
+        ], indent=2)
         
     def get_scopes(self):
         return sorted(set([table_info['scope'] for table_info in self.tables
@@ -679,13 +682,13 @@ class GenericDataset:
             if "scope" not in table_info or scope != table_info["scope"]: continue
             if "type" not in table_info: continue
             
+            if "source" not in table_info: continue
+            if "concept_id_field" not in table_info: continue
+            
             if return_type is None:
                 return_type = table_info["type"]
             elif table_info["type"] != return_type:
                 raise ValueError(f"Tables matching scope '{scope}' have multiple types, must all be either Events or Intervals")
-            
-            if "source" not in table_info: continue
-            if "concept_id_field" not in table_info: continue
             
             table = self._get_table(table_info)
             if value_field is not None:
@@ -700,6 +703,24 @@ class GenericDataset:
                 result_df = pd.DataFrame(self._fetch_rows(result), columns=result.keys())
                 results.append(result_df)
             
+        if not any(len(r) for r in results):
+            if return_type == 'event':
+                return Events(pd.DataFrame({
+                    'id': [],
+                    'eventtype': [],
+                    'time': [],
+                    'value': []
+                }))
+            elif return_type == 'interval':
+                return Intervals(pd.DataFrame({
+                    'id': [],
+                    'eventtype': [],
+                    'starttime': [],
+                    'endtime': [],
+                    'value': []
+                }))
+            else:
+                raise ValueError(f"No matching table for scope '{scope}'")
         concat_df = pd.concat([r for r in results if len(r)], axis=0, ignore_index=True)    
         if return_type == 'event':
             concat_df['eventtype'] = concat_df['eventtype'].replace(concept_name_dict).astype('category')
@@ -1183,10 +1204,10 @@ class GenericDataset:
                                 type=table_info['type']
                             )
                             scope_names.append(result_df)
+                self._name_list_cache[cache_key] = pd.concat(scope_names)
+                type_names += scope_names
             except Exception as e:
                 raise type(e)(f"Error listing data elements for scope '{table_info['scope']}': {e}")
-            self._name_list_cache[cache_key] = pd.concat(scope_names)
-            type_names += scope_names
         
         if not type_names:
             return pd.DataFrame({'name': [], 'scope': [], 'type': [], **({'count': []} if return_counts else {})})
