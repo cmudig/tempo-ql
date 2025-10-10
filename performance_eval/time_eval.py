@@ -20,10 +20,7 @@ query_engine = QueryEngine(dataset)
 
 all_patient_ids = query_engine.get_ids()
 
-if os.path.exists("performance_results.csv"):
-    results = pd.read_csv("performance_results.csv", index_col=0).to_dict(orient='record')
-else:
-    results = []
+results = []
 seeds = [123, 456, 789]
 
 for id_size in [1000, 5000, 10000, 50000]:
@@ -64,4 +61,4 @@ for id_size in [1000, 5000, 10000, 50000]:
             })
             
             time.sleep(5)
-            pd.DataFrame(results).to_csv("performance_results.csv", index=False)
+            pd.DataFrame(results).to_csv("time_eval/performance_results.csv", index=False)

@@ -76,7 +76,7 @@ query_engine = QueryEngine(dataset)
 ai_assistant = AIAssistant(query_engine, api_key=gemini_api_key)
 
 # Create results directory if it doesn't exist
-results_dir = Path("LLM_results")
+results_dir = Path("LLM_eval/results")
 results_dir.mkdir(exist_ok=True)
 
 results = []
@@ -206,11 +206,10 @@ for i in range(n_iterations):
                 sql_values.to_csv(sql_filename, index=False)
                 
             # Save results after all iterations
-            pd.DataFrame(results).to_csv("LLM_performance_results.csv", index=False)
+            pd.DataFrame(results).to_csv("LLM_eval/LLM_performance_results.csv", index=False)
         except Exception as e:
             with open("crash_log.txt", "a") as file:
                 file.write(f'skipped {query["name"]}, iteration {i}\n')
                 file.write(traceback.format_exc() + '\n\n')
 # Print summary
 print(f"\nResults saved to: {results_dir.absolute()}")
-print(f"Performance metrics saved to: LLM_performance_results.csv")
