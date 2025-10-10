@@ -261,8 +261,16 @@ class Compilable:
         agg_func = agg_func.lower()
         ids = start_times.get_ids()
         assert (ids == end_times.get_ids()).all(), "Start times and end times must have equal sets of IDs"
-        starts = np.array(start_times.get_times(), dtype=np.int64)
-        ends = np.array(end_times.get_times(), dtype=np.int64)
+        if (is_datetime_or_timedelta(start_times.get_times().dtype) and
+            is_datetime_or_timedelta(end_times.get_times().dtype)):
+            starts = np.array(start_times.get_times().astype('datetime64[ns]').astype(int) / 10**9, dtype=np.int64)
+            ends = np.array(end_times.get_times().astype('datetime64[ns]').astype(int) / 10**9, dtype=np.int64)
+        elif (not is_datetime_or_timedelta(start_times.get_times().dtype) and
+            not is_datetime_or_timedelta(end_times.get_times().dtype)):
+            starts = np.array(start_times.get_times(), dtype=np.int64)
+            ends = np.array(end_times.get_times(), dtype=np.int64)
+        else:
+            raise ValueError("Start times and end times must all be of the same type (either datetime or numeric)")
         assert len(starts) == len(ends), "Start and end times must be same length"
         
         # TODO: This method of combining inputs in matrices only works when all
@@ -277,6 +285,7 @@ class Compilable:
         series_inputs = None
         result_name = None
         series_type = None # None, "events" or "intervals"
+        categorical_dtype = None
         for name, value in self.leaves.items():
             value = value.data
             if isinstance(value, TimeIndex): value = value.to_timeseries()
@@ -286,7 +295,16 @@ class Compilable:
                 preaggregated_input_names.append(name)
                 preagg_values = value.get_values()
                 if not pd.api.types.is_numeric_dtype(preagg_values.dtype):
-                    preagg_values = np.where(pd.isna(preagg_values), np.nan, np.array(preagg_values, dtype='object'))
+                    if categorical_dtype is not None:
+                        uniques = preagg_values.unique()
+                        categorical_dtype = pd.CategoricalDtype(categorical_dtype.categories.union(uniques))
+                        preagg_values = np.where(pd.isna(preagg_values), np.nan,
+                                                 pd.Categorical(preagg_values, dtype=categorical_dtype).codes)
+                    else:
+                        cat = pd.Categorical(preagg_values, dtype=categorical_dtype)
+                        preagg_values = np.where(pd.isna(preagg_values), np.nan,
+                                                 cat.codes)
+                        categorical_dtype = cat.dtype
                 else:
                     preagg_values = preagg_values.astype(np.float64).values
                 preaggregated_inputs.append(preagg_values.reshape(-1, 1))
@@ -303,14 +321,26 @@ class Compilable:
                 else:
                     raise ValueError(f"Unsupported aggregation expression type {type(value).__name__}")
                 
-                # if pd.api.types.is_object_dtype(value.get_values().values.dtype) or pd.api.types.is_string_dtype(value.get_values().values.dtype):
-                #     raise NotImplementedError("Nested aggregations currently only work on numerical values")
+                new_series_inputs = value.prepare_aggregation_inputs(agg_func, convert_to_categorical=False)
+                if (pd.api.types.is_object_dtype(value.get_values().dtype) or 
+                    pd.api.types.is_string_dtype(value.get_values().dtype) or
+                    isinstance(value.get_values().dtype, pd.CategoricalDtype)):
+                    # Convert to numbers before using numba
+                    if categorical_dtype is not None:
+                        uniques = np.unique(new_series_inputs[-2])
+                        categorical_dtype = pd.CategoricalDtype(categorical_dtype.categories.union(uniques))
+                        categorical_series_vals = np.where(pd.isna(new_series_inputs[-2]), np.nan,
+                                                 pd.Categorical(new_series_inputs[-2], dtype=categorical_dtype).codes)
+                    else:
+                        cat = pd.Categorical(new_series_inputs[-2], dtype=categorical_dtype)
+                        categorical_series_vals = np.where(pd.isna(new_series_inputs[-2]), np.nan,
+                                                           cat.codes)
+                        categorical_dtype = cat.dtype
+                    new_series_inputs = (*new_series_inputs[:-2], categorical_series_vals, new_series_inputs[-1])
                 
                 if series_inputs is None:
-                    series_inputs = value.prepare_aggregation_inputs(agg_func, convert_to_categorical=False)
-                    series_inputs = (*series_inputs[:-2], series_inputs[-2].reshape(-1, 1))
+                    series_inputs = (*new_series_inputs[:-2], new_series_inputs[-2].reshape(-1, 1))
                 else:
-                    new_series_inputs = value.prepare_aggregation_inputs(agg_func, convert_to_categorical=False)
                     assert new_series_inputs[0].equals(series_inputs[0]), "IDs do not match among unaggregated expressions"
                     # assert new_series_inputs[1].equals(series_inputs[1]), "Times do not match among unaggregated expressions"
                     # if isinstance(value, Intervals):
@@ -366,6 +396,9 @@ class Compilable:
             
         assert len(grouped_values) == len(index)
         
+        if categorical_dtype is not None and agg_func in TYPE_PRESERVING_AGG_FUNCTIONS:
+            grouped_values = pd.Categorical.from_codes(np.where(np.isnan(grouped_values), -1, grouped_values), dtype=categorical_dtype)
+        
         return TimeSeries(index, pd.Series(grouped_values, name=result_name or "aggregated_series").convert_dtypes())
         
     def aggregate(self, start_times, end_times, agg_type, agg_func):
@@ -378,7 +411,7 @@ class Compilable:
         
     def where(self, condition, other=None):
         if not hasattr(other, "get_values"):
-            if other is None: other = "pd.NA"
+            if other is None: other = "np.nan"
             return Compilable(lambda immediate: (
             f"({self.function_string()}).where(({condition.function_string(immediate)}).get_values().astype(bool), {other})" 
             if immediate else 
@@ -1508,9 +1541,9 @@ class TimeIndex(TimeSeriesQueryable):
         Events object"""
         event_times = events.df[[events.id_field, events.time_field]]
         mask = np.ones(len(event_times), dtype=bool)
-        if starts is not None:
+        if starts is not None and not pd.isna(starts.get_values()).all():
             mask &= event_times[events.time_field] >= make_aligned_value_series(events, starts)
-        if ends is not None:
+        if ends is not None and not pd.isna(ends.get_values()).all():
             mask &= event_times[events.time_field] < make_aligned_value_series(events, ends)
         # Don't deduplicate times, for consistency with other operations
         # mask &= ~event_times.duplicated([events.id_field, events.time_field])

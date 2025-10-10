@@ -67,6 +67,7 @@ CUT_TYPE: /bins?/i|/quantiles?/i
     | comparison "=" agg_expr                    -> eq
     | comparison "BETWEEN"i agg_expr "AND"i agg_expr  -> between
     | comparison "CONTAINS"i agg_expr  -> contains
+    | comparison "MATCHES"i agg_expr  -> matches
     | comparison "STARTSWITH"i agg_expr  -> startswith
     | comparison "ENDSWITH"i agg_expr  -> endswith
     | comparison ("!="|"<>") agg_expr            -> ne
@@ -114,7 +115,7 @@ UNIT: /years?|days?|hours?|minutes?|seconds?|yrs?|hrs?|mins?|secs?|[hmsdy]/i
 ?data_element_query_el: /id|name|type|value|scope/i ("="|"EQUALS"i) (QUOTED_STRING | VAR_NAME | SIGNED_NUMBER)   -> data_element_eq
     | /id|name|type|value|scope/i ("IN"i) value_list                       -> data_element_in
     | /id|name|type|value|scope/i PATTERN_CMD LITERAL -> data_element_pattern
-    | /(?!id|name|type|value|scope)[^};'"`]+/i -> data_element_query_basic
+    | /(?!id|name|type|value|scope)\w[^};'"`]+/i -> data_element_query_basic
     
 PATTERN_CMD: "MATCHES"i|"CONTAINS"i|"STARTSWITH"i|"ENDSWITH"i
 VAR_NAME: /(?!(and|or|not|case|when|else|in|then|every|at|from|to|with|as)\b)[A-Za-z][A-Za-z0-9_]*/ 
@@ -202,6 +203,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
         self.value_placeholder = None
         self.index_value_placeholder = None
         self.variables = {}
+        self._data_element_cache = {}
         self._all_ids = None
         self._mintimes = None
         self._maxtimes = None
@@ -245,7 +247,7 @@ class EvaluateQuery(lark.visitors.Interpreter):
             raise ValueError(f"Unknown field specifier for data element query '{field}'")
         if field.lower() in ("value", "scope", "type"):
             raise ValueError(f"'in' queries cannot be used with '{field}' field specifier")
-        return {field.lower(): ("in", self.visit(value_spec))}
+        return {field.lower(): ("in", tuple(self.visit(value_spec)))}
     
     def data_element_pattern(self, tree):
         field, relation, value_spec = tree.children
@@ -283,14 +285,20 @@ class EvaluateQuery(lark.visitors.Interpreter):
                     'value': pd.Series([], dtype=float)
                 }))
 
-        value = self.dataset.get_data_element(
+        cache_key = tuple(sorted(dict(
             scope=el_query.get("scope", (None, None))[1],
             data_type=requested_type,
             concept_id_query=el_query.get("id", None),
             concept_name_query=el_query.get("name", None),
-            value_field=el_query.get("value", (None, None))[1],
-            return_queries=self._logging_subqueries)
-        
+            value_field=el_query.get("value", (None, None))[1]).items()))
+        if cache_key in self._data_element_cache:
+            value = self._data_element_cache[cache_key]
+        else:
+            value = self.dataset.get_data_element(
+                **dict(cache_key),
+                return_queries=self._logging_subqueries)
+            self._data_element_cache[cache_key] = value
+                    
         if self._logging_subqueries:
             value, queries = value
         else:
@@ -391,18 +399,30 @@ class EvaluateQuery(lark.visitors.Interpreter):
         return (start, end, new_index)
     
     def time_bounds_upper(self, tree):
+        all_ids = self.get_all_ids()
+        upper = self.visit(tree.children[1])
+        if is_datetime_or_timedelta(upper.get_values().dtype):
+            lower = Attributes(pd.to_datetime(pd.Series([pd.Timestamp.min] * len(all_ids), index=all_ids, name='min_times_placeholder')))
+        else:
+            lower = Attributes(pd.Series([-1e20] * len(all_ids), index=all_ids, name='min_times_placeholder'))
         start, end, new_index = self.time_bounds_both_ends(lark.Tree('time_bounds_both_ends', [lark.Token('', ''), 
-                                                                self.min_time(lark.Tree('', [])),
+                                                                lower,
                                                                 lark.Token('', ''),
-                                                                self.visit(tree.children[1])]))
-        return start, self._perform_binary_numpy_function([start, end], "max", np.maximum), new_index
+                                                                upper]))
+        return start, end, new_index
     
     def time_bounds_lower(self, tree):
+        all_ids = self.get_all_ids()
+        lower = self.visit(tree.children[1])
+        if is_datetime_or_timedelta(upper.get_values().dtype):
+            upper = Attributes(pd.to_datetime(pd.Series([pd.Timestamp.max] * len(all_ids), index=all_ids, name='min_times_placeholder')))
+        else:
+            upper = Attributes(pd.Series([1e20] * len(all_ids), index=all_ids, name='min_times_placeholder'))
         start, end, new_index = self.time_bounds_both_ends(lark.Tree('', [lark.Token('', ''),
-                                                                self.visit(tree.children[1]), 
+                                                                lower, 
                                                                 lark.Token('', ''),
-                                                                self.max_time(lark.Tree('', []))]))
-        return self._perform_binary_numpy_function([start, end], "min", np.minimum), end, new_index
+                                                                upper]))
+        return start, end, new_index
 
     def time_bounds_instant(self, tree):
         times = self.visit(tree.children[0])
@@ -487,12 +507,33 @@ class EvaluateQuery(lark.visitors.Interpreter):
     def startswith(self, tree):
         base_items = self.visit(tree.children[0])
         strings = base_items.get_values().astype(str)
-        return base_items.with_values(strings.str.startswith(self.visit(tree.children[1])))
+        pat = self.visit(tree.children[1])
+        if isinstance(pat, re.Pattern):
+            new_values = strings.str.contains("^(?:" + pat.pattern.lstrip("^") + ")")
+        else:
+            new_values = strings.str.startswith(pat)
+        return base_items.with_values(new_values)
+        
     def endswith(self, tree):
         base_items = self.visit(tree.children[0])
         strings = base_items.get_values().astype(str)
-        return base_items.with_values(strings.str.endswith(self.visit(tree.children[1])))
+        pat = self.visit(tree.children[1])
+        if isinstance(pat, re.Pattern):
+            new_values = strings.str.contains("(?:" + pat.pattern.rstrip("$") + ")$")
+        else:
+            new_values = strings.str.endswith(pat)
+        return base_items.with_values(new_values)
     
+    def matches(self, tree):
+        base_items = self.visit(tree.children[0])
+        strings = base_items.get_values().astype(str)
+        pat = self.visit(tree.children[1])
+        if isinstance(pat, re.Pattern):
+            new_values = strings.str.contains("^(?:" + pat.pattern.lstrip("^").rstrip("$") + ")$")
+        else:
+            new_values = strings.str.contains("^(?:" + re.escape(pat) + ")$")
+        return base_items.with_values(new_values)
+
     def negate(self, tree): return ~self.visit(tree.children[0])
     
     def logical_and(self, tree): return (
@@ -771,15 +812,15 @@ class EvaluateQuery(lark.visitors.Interpreter):
         if not isinstance(num_bins, (float, int)) and int(num_bins) == num_bins:
             raise ValueError("Cut must either be followed by an integer bin count or a list of bin cutoffs")
         cut_type = tree.children[1].value
-        return CutOperator(int(num_bins), cut_type, names=tree.children[3] if len(tree.children) > 3 else None)
+        return CutOperator(int(num_bins), cut_type, names=self.visit(tree.children[2].children[-1]) if len(tree.children) > 2 else None)
     
     def manual_cut(self, tree):
         cut_type = tree.children[0].value
         bins = self.visit(tree.children[1])
-        return CutOperator(np.array(bins), cut_type, names=tree.children[3] if len(tree.children) > 3 else None)
+        return CutOperator(np.array(bins), cut_type, names=self.visit(tree.children[2].children[-1]) if len(tree.children) > 2 else None)
     
     def cut_clause(self, tree):
-        _, base_values, cut_op = tree.children
+        base_values, _, cut_op = tree.children
         return self.visit(cut_op).apply(self.visit(base_values))
         
 
@@ -800,6 +841,10 @@ class EvaluateQuery(lark.visitors.Interpreter):
                 
         if tree.children[2] is not None:
             start_el, end_el, _ = self.visit(tree.children[2])
+            if pd.isna(start_el.get_values()).all():
+                start_el = self.min_time(lark.Tree('', []))
+            if pd.isna(end_el.get_values()).all():
+                end_el = self.max_time(lark.Tree('', []))
             start_time = self._make_time_index(start_el)
             end_time = self._make_time_index(end_el)
         else:
@@ -815,8 +860,9 @@ class EvaluateQuery(lark.visitors.Interpreter):
             start_time = self.visit(tree.children[-1].children[0])
             end_time = self.visit(tree.children[-1].children[1])
         else:
-            start_time = self.min_time(lark.Tree('', []))
-            end_time = self.max_time(lark.Tree('', []))
+            all_ids = self.get_all_ids()
+            start_time = Attributes(pd.Series([np.nan] * len(all_ids), index=all_ids, name='min_times_placeholder'))
+            end_time = Attributes(pd.Series([np.nan] * len(all_ids), index=all_ids, name='max_times_placeholder'))
             
         if isinstance(start_time, Attributes) and isinstance(end_time, Attributes):
             pass

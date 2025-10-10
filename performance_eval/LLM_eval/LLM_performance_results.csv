@@ -1,0 +1,248 @@
+query_name,iteration,method,result,error,query
+Aggregating Counts at Event Times,9,TempoQL,error,Exception occurred when processing variable 'None': Exception occurred when processing variable 'None': 'start',"(
+  count(
+    start({Cardioversion/Defibrillation; scope = procedureevents})
+    from #now to #now + 24 hours
+  )
+) at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,9,SQL,invalid,,"-- Find all heart rhythm observations from chartevents.
+-- For each observation, count the number of cardioversion or defibrillation
+-- procedures from procedureevents that occurred in the subsequent 24 hours.
+WITH heart_rhythms AS (
+  SELECT
+    ce.stay_id,
+    ce.charttime
+  FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+  WHERE
+    ce.itemid = 220048 -- Heart Rhythm
+),
+
+procedures AS (
+  SELECT
+    pe.stay_id,
+    pe.starttime
+  FROM `physionet-data.mimiciv_3_1_icu.procedureevents` AS pe
+  WHERE
+    pe.itemid IN (
+      224280, -- Cardioversion
+      225464  -- Defibrillator Pacemaker
+    )
+)
+
+SELECT
+  hr.stay_id,
+  hr.charttime,
+  COUNT(p.starttime) AS cardioversion_defib_count_next_24hr
+FROM heart_rhythms AS hr
+LEFT JOIN procedures AS p
+  ON hr.stay_id = p.stay_id
+  -- The procedure must start in the 24 hours following the heart rhythm observation
+  AND p.starttime > hr.charttime
+  AND p.starttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+  hr.stay_id,
+  hr.charttime"
+Carrying Values Forward,9,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents}
+  from #now - 24 hours to #now
+  carry 2 days
+) every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,9,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [9:14]
+
+Location: US
+Job ID: 3c59809b-9d30-46f1-990b-19c2beae9980
+","WITH
+  hourly_grid AS (
+    SELECT
+      stay_id,
+      grid_time
+    FROM
+      `ai-clinician.tempo_ql_scratch_mimic.icustays` AS icu
+    CROSS JOIN
+      UNNEST(GENERATE_TIMESTAMP_ARRAY(icu.intime, icu.outtime, INTERVAL 24 HOUR)) AS grid_time
+  ),
+  o2_device_events AS (
+    SELECT
+      stay_id,
+      CAST(charttime AS TIMESTAMP) AS charttime,
+      value
+    FROM
+      `physionet-data.mimiciv_3_1_icu.chartevents`
+    WHERE
+      itemid = 223834 -- O2 Delivery Device(s)
+      AND value IS NOT NULL
+      AND value != ''
+  ),
+  earliest_in_window AS (
+    SELECT
+      grid.stay_id,
+      grid.grid_time,
+      ev.value,
+      ev.charttime AS event_time
+    FROM
+      hourly_grid AS grid
+    LEFT JOIN
+      o2_device_events AS ev
+      ON grid.stay_id = ev.stay_id
+      AND ev.charttime > TIMESTAMP_SUB(grid.grid_time, INTERVAL 24 HOUR)
+      AND ev.charttime <= grid.grid_time
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY grid.stay_id, grid.grid_time ORDER BY ev.charttime ASC) = 1
+  ),
+  locf_setup AS (
+    SELECT
+      stay_id,
+      grid_time,
+      value,
+      event_time,
+      COUNT(value) OVER (PARTITION BY stay_id ORDER BY grid_time) AS value_partition
+    FROM
+      earliest_in_window
+  ),
+  locf_applied AS (
+    SELECT
+      stay_id,
+      grid_time,
+      FIRST_VALUE(value) OVER (PARTITION BY stay_id, value_partition ORDER BY grid_time) AS carried_value,
+      FIRST_VALUE(event_time) OVER (PARTITION BY stay_id, value_partition ORDER BY grid_time) AS original_event_time
+    FROM
+      locf_setup
+  )
+SELECT
+  stay_id,
+  grid_time AS charttime,
+  carried_value AS value
+FROM
+  locf_applied
+WHERE
+  carried_value IS NOT NULL
+  AND TIMESTAMP_DIFF(grid_time, original_event_time, HOUR) <= 48
+ORDER BY
+  stay_id,
+  grid_time"
+Aggregating Counts at Event Times,10,TempoQL,valid,,"(
+  count(
+    start({Cardioversion/Defibrillation; scope = procedureevents})
+  ) from #now to #now + 24 hours
+) at every {Heart Rhythm; scope = chartevents}"
+Aggregating Counts at Event Times,10,SQL,invalid,,"-- Assumptions:
+-- 1. ""Heart Rhythm"" events are identified by itemid 220048 in chartevents.
+-- 2. ""Cardioversion/Defibrillation procedure events"" are not in a dedicated procedures table with a start time,
+--    but are inferred from other chart events.
+--    - Cardioversion is identified by itemid 224833 with a value of 'Yes'.
+--    - Defibrillation is identified by the charting of itemid 220954 ('Defibrillator Output').
+WITH heart_rhythm_events AS (
+    SELECT
+        ce.stay_id,
+        ce.charttime
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    WHERE
+        ce.itemid = 220048 -- Heart Rhythm
+),
+cardio_defib_events AS (
+    SELECT
+        ce.stay_id,
+        ce.charttime
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    WHERE
+        (
+            ce.itemid = 224833 AND ce.value = 'Yes'
+        ) -- Cardioversion
+        OR ce.itemid = 220954 -- Defibrillator Output
+)
+SELECT
+    hr.stay_id,
+    hr.charttime,
+    COUNT(cd.charttime) AS cardioversion_defib_count
+FROM heart_rhythm_events AS hr
+LEFT JOIN cardio_defib_events AS cd
+    ON hr.stay_id = cd.stay_id
+    AND cd.charttime > hr.charttime
+    AND cd.charttime <= DATETIME_ADD(hr.charttime, INTERVAL 24 HOUR)
+GROUP BY
+    hr.stay_id,
+    hr.charttime
+ORDER BY
+    hr.stay_id,
+    hr.charttime"
+Carrying Values Forward,10,TempoQL,valid,,"(
+  first {O2 Delivery Device(s); scope = chartevents} from #now - 24 hours to #now carry 2 days
+) every 24 hours from {Admit Time} to {Discharge Time}"
+Carrying Values Forward,10,SQL,error,"Reason: 400 No matching signature for function GENERATE_TIMESTAMP_ARRAY for argument types: DATETIME, DATETIME, INTERVAL INT64 DATE_TIME_PART
+  Signature: GENERATE_TIMESTAMP_ARRAY(TIMESTAMP, TIMESTAMP, INTERVAL INT64 DATE_TIME_PART)
+    Argument 1: Unable to coerce type DATETIME to expected type TIMESTAMP at [29:14]
+
+Location: US
+Job ID: c0da179f-88b3-4bc2-88fd-bb40fcfff30d
+","WITH
+  icustays_filtered AS (
+    SELECT
+      stay_id,
+      intime,
+      outtime
+    FROM `ai-clinician.tempo_ql_scratch_mimic.icustays`
+  ),
+  o2_device_events AS (
+    SELECT
+      ce.stay_id,
+      ce.charttime,
+      ce.value
+    FROM `physionet-data.mimiciv_3_1_icu.chartevents` AS ce
+    INNER JOIN icustays_filtered AS ifs
+      ON ce.stay_id = ifs.stay_id
+      AND ce.charttime >= ifs.intime
+      AND ce.charttime < ifs.outtime
+    WHERE
+      ce.itemid = 223834 -- O2 Delivery Device(s)
+      AND ce.value IS NOT NULL
+      AND ce.value != ''
+  ),
+  time_grid AS (
+    SELECT
+      ifs.stay_id,
+      generated_timestamp AS grid_time
+    FROM icustays_filtered AS ifs,
+      UNNEST(GENERATE_TIMESTAMP_ARRAY(ifs.intime, ifs.outtime, INTERVAL 24 HOUR)) AS generated_timestamp
+  ),
+  grid_with_values AS (
+    SELECT
+      tg.stay_id,
+      tg.grid_time,
+      o2.value
+    FROM time_grid AS tg
+    LEFT JOIN o2_device_events AS o2
+      ON tg.stay_id = o2.stay_id
+      AND o2.charttime >= TIMESTAMP_SUB(tg.grid_time, INTERVAL 24 HOUR)
+      AND o2.charttime < tg.grid_time
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY tg.stay_id, tg.grid_time ORDER BY o2.charttime ASC) = 1
+  ),
+  carry_forward AS (
+    SELECT
+      stay_id,
+      grid_time,
+      LAST_VALUE(value IGNORE NULLS) OVER (
+        PARTITION BY stay_id ORDER BY grid_time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS last_value_carried,
+      LAST_VALUE(
+        CASE WHEN value IS NOT NULL THEN grid_time END IGNORE NULLS
+      ) OVER (
+        PARTITION BY stay_id ORDER BY grid_time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS last_observation_grid_time
+    FROM grid_with_values
+  )
+SELECT
+  stay_id,
+  grid_time AS charttime,
+  CASE
+    WHEN
+      TIMESTAMP_DIFF(
+        grid_time, last_observation_grid_time, DAY
+      ) <= 2
+      THEN last_value_carried
+    ELSE NULL
+  END AS value
+FROM carry_forward
+ORDER BY
+  stay_id,
+  grid_time"
