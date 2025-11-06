@@ -2,7 +2,9 @@
 
 ## Quickstart
 
-You may first want to create a conda environment or other virtual environment to install packages in. *Use a Python version between 3.10 and 3.14 for compatibility with TempoQL's dependencies.* Clone the repo, cd into it and run `pip install .`.
+You may first want to create a conda environment to install packages in. *Use a Python version between 3.10 and 3.14 for compatibility with TempoQL's dependencies.* Clone the repo, cd into it and run `pip install .`.
+
+*We have had issues in the past running the JupyterLab widget with virtualenv - therefore we recommend using conda.*
 
 In `demo.ipynb`, we show how to use the query language using MIMIC-IV in OMOP format. You can run that notebook to explore how TempoQL enables simple, readable and precise queries on EHR data. We recommend installing JupyterLab (`pip install jupyterlab`), then running a JupyterLab instance (`jupyter lab`) in this repo directory, and opening and running `demo.ipynb`.
 
