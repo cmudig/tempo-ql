@@ -1,7 +1,7 @@
 {
   "Timestamps": {
     "Admission": "last time({id in ('SNOMED/449431000124100', 'SNOMED/281685003', 'SNOMED/11545006'); scope = SNOMED}) before SepsisOnset",
-    "Discharge": "((first time({id in ('SNOMED/87309006', 'SNOMED/58000006'); scope = SNOMED}) from SepsisOnset to SepsisOnset + 30 days) impute (SepsisOnset + 14 days)) where Admission exists"
+    "Discharge": "(first time({id in ('SNOMED/87309006', 'SNOMED/58000006'); scope = SNOMED}) from Admission to Admission + 30 days) impute (Admission + 14 days)"
   },
   "Demographics": {
     "Gender": "case when {FEMALE} exists then 'Female' else 'Male' end",

@@ -31,10 +31,10 @@ dependencies = [
     "duckdb-engine",
     "google-genai"
 ]
-version = "0.1.2"
+version = "0.1.3"
 
 [project.urls]
-Homepage = "https://github.com/venkatesh-sivaraman/tempo-ql"
+Homepage = "https://github.com/cmudig/tempo-ql"
 
 [tool.setuptools]
 packages = ["tempo_ql"]
