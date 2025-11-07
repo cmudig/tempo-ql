@@ -27,12 +27,11 @@ dependencies = [
     "ipywidgets",
     "anywidget",
     "scipy>=1.11.3",
-    "duckdb>=0.9.2",
     "sqlalchemy>=2.0.31",
     "duckdb-engine",
     "google-genai"
 ]
-version = "0.1.1"
+version = "0.1.2"
 
 [project.urls]
 Homepage = "https://github.com/venkatesh-sivaraman/tempo-ql"

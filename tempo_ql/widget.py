@@ -78,7 +78,10 @@ class TempoQLWidget(anywidget.AnyWidget):
     query_history = traitlets.List([]).tag(sync=True)
     ai_history = traitlets.List([]).tag(sync=True)
     
-    def __init__(self, query_engine: Optional["QueryEngine"] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None, dev: bool = False, *args, **kwargs):
+    # Widget appearance
+    height = traitlets.Int(default=None, allow_none=True).tag(sync=True)
+    
+    def __init__(self, query_engine: Optional["QueryEngine"] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None, dev: bool = False, verbose: bool = False, *args, **kwargs):
         """
         Initialize the Tempo-QL widget.
         
@@ -92,6 +95,8 @@ class TempoQLWidget(anywidget.AnyWidget):
                 will attempt to write to this file.
             dev: Use development assets instead of production build
         """
+        self.verbose = verbose
+        
         # Load frontend assets
         self._load_assets(dev)
         
@@ -153,7 +158,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.data = None
         
         # Initialize AI Assistant
-        self.ai_assistant = AIAssistant(query_engine=query_engine, api_key=api_key)
+        self.ai_assistant = AIAssistant(query_engine=query_engine, api_key=api_key, verbose=self.verbose)
         self.llm_available = self.ai_assistant.is_enabled
         self.api_status = self.ai_assistant.get_status()
         
@@ -315,7 +320,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             print("⚠️ AI assistant not available for explanation")
             return
             
-        print("🔍 AI explain mode triggered for successful query")
+        if self.verbose: print("🔍 AI explain mode triggered for successful query")
         try:            
             self._set_loading(True, "Explaining query...")
             
@@ -346,13 +351,13 @@ class TempoQLWidget(anywidget.AnyWidget):
         self.llm_explanation = ""
         
         var_name = self.process_trigger[len('variable:'):] if self.process_trigger.startswith('variable:') else None
-        print(f"🔍 Processing query: {query}, {var_name}")
+        if self.verbose: print(f"🔍 Processing query: {query}, {var_name}")
         try:
             self._set_loading(True, "Checking query...")
             self.execute_query(var_name, query)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            print(f"❌ Unexpected error: {error_msg}")
+            if self.verbose: print(f"❌ Unexpected error: {error_msg}")
             self.query_error = error_msg
             self.values = {}
             self.data = None
@@ -419,7 +424,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         force_refresh = trigger_value.endswith(':force')
         scope_name = trigger_value[:-6] if force_refresh else trigger_value
         
-        print(f"🔍 Analyzing scope: {scope_name} (force: {force_refresh})")
+        if self.verbose: print(f"🔍 Analyzing scope: {scope_name} (force: {force_refresh})")
         
         try:
             self._set_loading(True, f"Starting analysis of {scope_name}...")
@@ -428,7 +433,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             if analysis_result:
                 self.scope_concepts = analysis_result
                 concept_count = len(analysis_result.get('concepts', []))
-                print(f"✅ Found {concept_count} concepts in {scope_name}")
+                if self.verbose: print(f"✅ Found {concept_count} concepts in {scope_name}")
             elif force_refresh:
                 self.scope_concepts = {
                     'scope_name': scope_name,
@@ -440,7 +445,7 @@ class TempoQLWidget(anywidget.AnyWidget):
                 self.scope_concepts = {}
                 
         except Exception as e:
-            print(f"❌ Error analyzing scope {scope_name}: {e}")
+            if self.verbose: print(f"❌ Error analyzing scope {scope_name}: {e}")
             self.scope_concepts = {
                 'scope_name': scope_name,
                 'concept_count': 0,

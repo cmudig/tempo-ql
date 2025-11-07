@@ -37,7 +37,7 @@ class AIAssistant:
     Only functions when a valid API key is provided.
     """
     
-    def __init__(self, query_engine, api_key: Optional[str] = None):
+    def __init__(self, query_engine, api_key: Optional[str] = None, verbose: bool = False):
         """
         Initialize the AI Assistant with an optional API key.
         
@@ -50,6 +50,7 @@ class AIAssistant:
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         self.genai_client = None
         self.is_enabled = False
+        self.verbose = verbose
         
         # Initialize the Gemini client if we have a valid API key
         if self.api_key and self._is_valid_api_key(self.api_key):
@@ -397,7 +398,7 @@ Output:
                             function_response = json.dumps(matching_names.head(100).to_dict(orient='records'))
                             if len(matching_names) >= 100:
                                 function_response = "More than 100 concepts matched the query. The results are truncated.\n" + function_response
-                        print("Responding to function call:", query_filter, function_response)
+                        if self.verbose: print("Responding to function call:", query_filter, function_response)
                         from google.genai import types
                         function_response = types.Part.from_function_response(
                             name=function_call.name,
@@ -621,7 +622,7 @@ Please provide a clear explanation of:
             if not explain:
                 assert question is not None, "question must be provided to run generation"
                 needs_existing_query = self.validate_question(question, query)
-                print(f"🔍 Needs existing query for generate mode: {needs_existing_query}")
+                if self.verbose: print(f"🔍 Needs existing query for generate mode: {needs_existing_query}")
                 if needs_existing_query and not query:
                     raise ValueError("Answering your question seems to require an existing TempoQL query, but you haven't written one yet. Please try again.")
                 prompt = self._create_data_analysis_prompt(question, 
@@ -635,7 +636,7 @@ Please provide a clear explanation of:
             # Call Gemini API
             response = self._call_gemini_api(prompt)
             while not response.strip():
-                print("Received empty response, retrying in 5s...")
+                if self.verbose: print("Received empty response, retrying in 5s...")
                 time.sleep(5)
                 response = self._call_gemini_api(prompt)
             

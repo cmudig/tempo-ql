@@ -1036,12 +1036,25 @@ class GenericDataset:
         id_field_type = self.id_field_transform(self._get_table(arbitrary_table_info).c[arbitrary_table_info['id_field']]).type
         return id_field_type
     
-    def set_trajectory_ids(self, trajectory_id_list, batch_size=5000):
+    def set_trajectory_ids(self, trajectory_id_list, sample_size=None, random_state=None, batch_size=5000):
         """
         Sets the dataset to only return results for the given set of trajectory
         IDs.
+        
+        This method will upload a table to the scratch dataset. Ensure that you
+        have specified a scratch_schema_name when initializing the dataset if
+        you don't have write access to your dataset schema.
+
+        sample_size: If not None, randomly subsample the resulting set to this
+            size (if integer) or proportion (if less than one) of the dataset.
+        random_state: Random seed for sampling.
+        batch_size: Number of rows to upload at a time.
         """
         self.reset_trajectory_ids()
+        
+        if sample_size is not None:
+            rng = np.random.RandomState(random_state)
+            trajectory_id_list = rng.choice(trajectory_id_list, size=int(sample_size * len(trajectory_id_list)) if sample_size < 1 else sample_size)
         
         id_field_type = self.get_id_field_type()
         self._trajectory_id_table = Table(TRAJECTORY_ID_TABLE_NAME, 
@@ -1056,6 +1069,37 @@ class GenericDataset:
                     for id_val in trajectory_id_list[start_idx:start_idx + batch_size]
                 ]))
             conn.commit()
+            
+        self._id_cache = None
+        self._cte_cache = {}
+        self._name_list_cache.clear()
+            
+    def set_trajectory_ids_where(self, boolean_mask, sample_size=None, random_state=None, batch_size=5000):
+        """
+        Sets the dataset to only return results for trajectory IDs that have a
+        positive value in the given boolean mask (which can be a pandas Series
+        indexed by trajectory IDs or a TempoQL data type with boolean values).
+        
+        This method will upload a table to the scratch dataset. Ensure that you
+        have specified a scratch_schema_name when initializing the dataset if
+        you don't have write access to your dataset schema.
+        
+        sample_size: If not None, randomly subsample the resulting set to this
+            size (if integer) or proportion (if less than one) of the dataset.
+        random_state: Random seed for sampling.
+        batch_size: Number of rows to upload at a time.
+        """
+        if isinstance(boolean_mask, pd.Series):
+            ids = boolean_mask[boolean_mask].index.tolist()
+        elif hasattr(boolean_mask, "get_ids") and hasattr(boolean_mask, "get_values"):
+            ids = boolean_mask.get_ids()[boolean_mask.get_values().astype(bool)]
+        else:
+            raise ValueError(f"Unknown format for boolean mask: {type(boolean_mask).__name__}. Expected pandas Series, Attributes, Events, Intervals, or TimeSeries")
+        
+        self.set_trajectory_ids(ids,
+                                sample_size=sample_size,
+                                random_state=random_state,
+                                batch_size=batch_size)
             
     def list_data_elements(self, scope=None, return_counts=False, cache_only=False):
         """
