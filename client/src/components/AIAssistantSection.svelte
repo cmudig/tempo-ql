@@ -32,6 +32,7 @@
   function handleSubmit() {
     if (question.trim()) {
       onSubmit(question.trim());
+      tab = 'response';
       // Keep the question in the input box instead of clearing it
       if (inputElement) {
         inputElement.focus();

@@ -191,6 +191,22 @@ def make_query_result_summary(query_result, all_ids):
     return base
 
 def convert_to_native_types(o):
+    """
+    Recursively convert a possibly nested structure of NumPy objects,
+    NaNs, and infinite values to their native Python types.
+
+    Args:
+        o: The object to convert.
+
+    Returns:
+        The converted object.
+
+    Examples:
+        >>> convert_to_native_types([np.inf, np.nan, 1.0])
+        [inf, None, 1.0]
+        >>> convert_to_native_types({1: np.inf, 2: np.nan, 3: 1.0})
+        {1: inf, 2: None, 3: 1.0}
+    """
     if isinstance(o, dict):
         return {convert_to_native_types(k): convert_to_native_types(v) for k, v in o.items()}
     elif isinstance(o, (list, tuple, np.ndarray)):

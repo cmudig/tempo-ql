@@ -283,7 +283,9 @@ class TempoQLWidget(anywidget.AnyWidget):
         
         if change['new'] == 'explain':
             self._set_loading(True, "Explaining query...")
-            response_data = self.service.run_llm_explanation()
+            response_data = self.service.run_llm_explanation(
+                query=self.query_for_results, 
+                query_error=self.query_error)
             self.llm_explanation = response_data.get('explanation', '')
             self._set_loading(False)
             self.llm_trigger = ''

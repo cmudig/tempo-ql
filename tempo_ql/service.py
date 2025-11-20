@@ -8,23 +8,21 @@ if TYPE_CHECKING:
     from .evaluator import QueryEngine
 from .ai_assistant import AIAssistant
 from .utils import make_query_result_summary
+import numpy as np
 
 
 MAX_HISTORY_ITEMS = 10
 
 class TempoQLService:
     
-    def __init__(self, query_engine: Optional["QueryEngine"] = None, variable_store: Optional[MutableMapping] = None, api_key: Optional[str] = None):
+    def __init__(self, query_engine: Optional["QueryEngine"] = None, ai_assistant: Optional["AIAssistant"] = None,variable_store: Optional[MutableMapping] = None):
         self.query_engine = query_engine
+        self.ai_assistant = ai_assistant  
+
         self.variable_store = variable_store
         self.last_sql_query = None
         self.data = None
-        
-        # Initialize AI Assistant
-        self.ai_assistant = AIAssistant(query_engine=query_engine, api_key=api_key)
-        self.llm_available = self.ai_assistant.is_enabled
-        self.api_status = self.ai_assistant.get_status()
-        
+       
     def get_dataset_info(self):
         """Initialize data-dependent state if query engine is available."""
         if not self.query_engine:
@@ -62,7 +60,7 @@ class TempoQLService:
 
     # ==== QUERY PROCESSING ====
     
-    def execute_query(self, var_name: Optional[str], query: str, file_contents: Optional[dict]={}):
+    def execute_query(self, var_name: Optional[str], query: str, file_contents: Optional[dict]=None):
         """
         Execute a TempoQL query with comprehensive error handling.
         
@@ -112,7 +110,6 @@ class TempoQLService:
             return {
                 "ok": True,
                 "error": "",
-                "data": result,
                 "values": values,
                 "subqueries": subqueries,
                 "last_sql_query": self.last_sql_query
@@ -137,7 +134,7 @@ class TempoQLService:
                     'ok': True,
                     'scope_name': scope_name,
                     'concept_count': 0,
-                    'concepts': [],
+                    'concepts': {},
                     'analyzed_at': str(datetime.datetime.now()),
                     'cache_version': '4.0',
                     'total_records': 0
@@ -158,7 +155,7 @@ class TempoQLService:
 
     # ==== AI WORKFLOW ====
     
-    def run_llm_explanation(self):
+    def run_llm_explanation(self, query: str, query_error: str = ""):
         """Trigger AI explanation for a successful query."""
         if not (self.ai_assistant and self.ai_assistant.is_available()):
             print("⚠️ AI assistant not available for explanation")
@@ -169,8 +166,8 @@ class TempoQLService:
             # Process AI question
             response_data = self.ai_assistant.process_question(
                 explain=True, 
-                query=self.query_for_results, 
-                query_error=self.query_error)
+                query=query, 
+                query_error=query_error)
             
             if response_data.get('error', False):
                 llm_explanation = response_data.get('explanation', 'An error occurred while explaining your query. Please try again.')
