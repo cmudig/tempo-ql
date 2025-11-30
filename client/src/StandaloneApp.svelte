@@ -11,6 +11,7 @@
   import HistoryDropdown from './components/HistoryDropdown.svelte';
   import EditorView from './components/EditorView.svelte';
   import NavBar from './components/NavBar.svelte';
+  import defaultLogo from '../../assets/logo_light.png';
 
   // Create HTTP backend connection (FastAPI-based)
   const backend = createHttpBackendConnection('/api');
@@ -229,102 +230,157 @@
   function handleQueryHistoryClose() {
     showQueryHistoryDropdown = false;
   }
+
+  let introVisible: boolean = true;
 </script>
 
-<div class="w-full flex-shrink-0 border-b border-gray-800 bg-gray-900">
-  <NavBar />
+<main class="w-full h-screen flex flex-col bg-white dark:bg-gray-950 relative">
+  <NavBar on:showintro={() => (introVisible = true)} />
+  <div class="min-h-0 w-full flex-auto flex">
+    <EditorView
+      bind:fileContents={$fileContents}
+      savePath={$savePath}
+      bind:textInput={$textInput}
+      bind:aiQuestion={currentQuestion}
+      bind:currentQueryPath
+      {dataFields}
+      onRun={handleRun}
+      onExplain={handleLLMExplanationStream}
+      onLLMSubmit={handleLLMQuestionSubmit}
+      llmResponse={$llmResponse}
+      llmLoading={$llmLoading}
+      llmError={$llmError}
+      llmAvailable={$llmAvailable}
+      apiStatus={$apiStatus}
+      extractedQuery={$extractedQuery}
+      hasExtractedQuery={$hasExtractedQuery}
+      onQueryExtracted={handleQueryExtraction}
+      onHistoryClick={handleHistoryClick}
+      onQueryHistoryClick={handleQueryHistoryClick}
+    />
 
-<main class="w-full h-screen flex bg-white dark:bg-gray-950">
-  <EditorView
-    bind:fileContents={$fileContents}
-    savePath={$savePath}
-    bind:textInput={$textInput}
-    bind:aiQuestion={currentQuestion}
-    bind:currentQueryPath
-    {dataFields}
-    onRun={handleRun}
-    onExplain={handleLLMExplanationStream}
-    onLLMSubmit={handleLLMQuestionSubmit}
-    llmResponse={$llmResponse}
-    llmLoading={$llmLoading}
-    llmError={$llmError}
-    llmAvailable={$llmAvailable}
-    apiStatus={$apiStatus}
-    extractedQuery={$extractedQuery}
-    hasExtractedQuery={$hasExtractedQuery}
-    onQueryExtracted={handleQueryExtraction}
-    onHistoryClick={handleHistoryClick}
-    onQueryHistoryClick={handleQueryHistoryClick}
-  />
+    <div class="w-1/2 mb-2">
+      <div
+        class="w-full h-full border-l border-gray-300 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"
+      >
+        <!-- Tab Bar -->
+        <TabBar {activeTab} onTabChange={handleTabChange} />
 
-  <div class="w-1/2 mb-2">
-    <div
-      class="w-full h-full rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden flex flex-col dark:bg-gray-900"
-    >
-      <!-- Tab Bar -->
-      <TabBar {activeTab} onTabChange={handleTabChange} />
-
-      <!-- Tab Content -->
-      <div class="flex-auto w-full min-h-0 z-0">
-        {#if activeTab === 'results'}
-        <QueryResultsTab
-          bind:textInput={$textInput}
-          queryForResults={$queryForResults}
-          onRun={handleRun}
-          onExplain={handleLLMExplanationStream}
-          queryError={$queryError}
-          values={$values}
-          subqueries={$subqueries}
-          llmAvailable={$llmAvailable}
-          llmExplanation={$llmExplanation}
-          llmLoading={$llmLoading}
-          llmError={$llmError}
-          width="w-full"
-        />
-        {:else if activeTab === 'data-elements'}
-          <DataElementsTab
-            scopes={$scopes}
-            bind:scopeName={selectedScope}
-            scopeConcepts={$scopeConcepts}
-            isLoading={$isLoading}
-            loadingMessage={$loadingMessage}
-            onScopeSelect={(scope) => {
-              handleScopeAnalysis(scope, false);
-            }}
-            onAnalyze={() => {
-              handleScopeAnalysis(selectedScope, true);
-            }}
-            onInsert={(scope, selection) => {
-              $textInput = $textInput + `{${selection}; scope = ${scope}}`;
-            }}
-          />
-        {/if}
+        <!-- Tab Content -->
+        <div class="flex-auto w-full min-h-0 z-0">
+          {#if activeTab === 'results'}
+            <QueryResultsTab
+              bind:textInput={$textInput}
+              queryForResults={$queryForResults}
+              onRun={handleRun}
+              onExplain={handleLLMExplanationStream}
+              queryError={$queryError}
+              values={$values}
+              subqueries={$subqueries}
+              llmAvailable={$llmAvailable}
+              llmExplanation={$llmExplanation}
+              llmLoading={$llmLoading}
+              llmError={$llmError}
+              width="w-full"
+            />
+          {:else if activeTab === 'data-elements'}
+            <DataElementsTab
+              scopes={$scopes}
+              bind:scopeName={selectedScope}
+              scopeConcepts={$scopeConcepts}
+              isLoading={$isLoading}
+              loadingMessage={$loadingMessage}
+              onScopeSelect={(scope) => {
+                handleScopeAnalysis(scope, false);
+              }}
+              onAnalyze={() => {
+                handleScopeAnalysis(selectedScope, true);
+              }}
+              onInsert={(scope, selection) => {
+                $textInput = $textInput + `{${selection}; scope = ${scope}}`;
+              }}
+            />
+          {/if}
+        </div>
       </div>
     </div>
+
+    <!-- History Dropdown Component -->
+    <HistoryDropdown
+      isVisible={showAIHistoryDropdown}
+      history={$aiHistory}
+      onClose={handleHistoryClose}
+      onSelect={handleSelectHistoricalQuery}
+      position={historyDropdownPosition}
+    />
+
+    <!-- Query History Dropdown Component -->
+    <HistoryDropdown
+      isVisible={showQueryHistoryDropdown}
+      history={$queryHistory}
+      onClose={handleQueryHistoryClose}
+      onSelect={handleSelectHistoricalQuery}
+      position={queryHistoryDropdownPosition}
+    />
+
+    <!-- Loading Bar -->
+    <LoadingBar isLoading={$isLoading} message={$loadingMessage} />
   </div>
 
-  <!-- History Dropdown Component -->
-  <HistoryDropdown
-    isVisible={showAIHistoryDropdown}
-    history={$aiHistory}
-    onClose={handleHistoryClose}
-    onSelect={handleSelectHistoricalQuery}
-    position={historyDropdownPosition}
-  />
-
-  <!-- Query History Dropdown Component -->
-  <HistoryDropdown
-    isVisible={showQueryHistoryDropdown}
-    history={$queryHistory}
-    onClose={handleQueryHistoryClose}
-    onSelect={handleSelectHistoricalQuery}
-    position={queryHistoryDropdownPosition}
-  />
-
-  <!-- Loading Bar -->
-  <LoadingBar isLoading={$isLoading} message={$loadingMessage} />
+  {#if introVisible}
+    <div
+      class="w-full h-full absolute top-0 left-0 bg-black/80 flex items-center justify-center z-50"
+    >
+      <div
+        class="relative bg-white rounded-lg flex flex-col items-center justify-between p-8"
+        style="width: 50vw; height: 60vh; min-width: 320px; min-height: 320px; max-width: 90vw; max-height: 90vh;"
+      >
+        <div
+          class="flex-1 w-full flex flex-col items-center justify-center overflow-auto mb-4 px-6"
+        >
+          <img src={defaultLogo} alt="TempoQL" class="w-64 max-w-1/2 mb-4" />
+          <p class="text-gray-700 mb-4 text-center font-semibold">
+            <a href="https://github.com/cmudig/tempo-ql" target="_blank"
+              >TempoQL</a
+            > is a readable, precise, and portable query language and visual interface
+            for extracting and validating datasets from electronic health record
+            (EHR) data.
+          </p>
+          <p class="text-gray-700 mb-2 text-center">
+            This demo interface allows you to try TempoQL on the <a
+              href="https://physionet.org/content/mimic-iv-demo/2.2/"
+              target="_blank">MIMIC-IV Demo Dataset</a
+            >. For other datasets, you can
+            <a href="https://pypi.org/project/tempo-ql/" target="_blank"
+              >install TempoQL</a
+            >
+            using Pip.<br />
+          </p>
+          <p class="text-gray-500 mb-4 text-center">
+            <strong>How to Use:</strong> Type a TempoQL query in the top left, or
+            ask the AI Assistant in the lower left to generate a query for you. TempoQL
+            queries work best at extracting attributes, events, intervals, or time
+            series over a set of patients.
+          </p>
+          <p class="text-gray-500 text-sm text-center">
+            If using TempoQL in your work, please cite <a
+              href="https://arxiv.org/abs/2511.09337"
+              target="_blank">our paper</a
+            >. This demo website was created by Ryan Ng.
+          </p>
+        </div>
+        <div class="w-full flex justify-center">
+          <button
+            class="px-3 py-1.5 font-semibold rounded-md transition-colors duration-200 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white whitespace-nowrap"
+            on:click={() => (introVisible = false)}
+          >
+            Start
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>
-</div>
 
 <style>
   /* Custom scrollbar for webkit browsers */
