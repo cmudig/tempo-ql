@@ -57,6 +57,8 @@ export function createJupyterBackendConnection(model: BackendModel) {
   const queryHistory = traitlet(model, 'query_history', []);
   const aiHistory = traitlet(model, 'ai_history', []);
 
+  const height = traitlet(model, 'height', null);
+
   // Store text input separately
   let currentTextInput = '';
 
@@ -84,6 +86,7 @@ export function createJupyterBackendConnection(model: BackendModel) {
     textInput,
     queryHistory,
     aiHistory,
+    height,
 
     runQuery: (variableName: string | null, textInput: string) => {
       model.set('text_input', textInput);

@@ -104,7 +104,7 @@ class MEDSDataset(GenericDataset):
                     self._table_context.append({
                         "scope": scope,
                         "attributes": {
-                            
+                            name: {} for name in names
                         }
                     })
         return json.dumps(self._table_context)

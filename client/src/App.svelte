@@ -43,6 +43,7 @@
     queryForResults,
     queryHistory,
     aiHistory,
+    height,
   } = backend;
 
   let selectedScope: string = '';
@@ -145,7 +146,9 @@
 
 <main
   class="w-full bg-white dark:bg-gray-950 transition-colors duration-200 relative overflow-hidden flex"
-  style="height: min(600px, max(400px, 70vh));"
+  style="height: {$height != null
+    ? `${$height}px`
+    : 'min(600px, max(400px, 70vh))'};"
 >
   <EditorView
     bind:fileContents={$fileContents}
