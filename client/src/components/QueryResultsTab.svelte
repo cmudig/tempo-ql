@@ -17,6 +17,7 @@
   // AI Assistant props
   export let llmAvailable: boolean = false;
   export let llmExplanation: string = '';
+  export let llmLoading: boolean = false;
 </script>
 
 <div
@@ -58,7 +59,14 @@
           {#if !!queryError}Explain and Fix{:else}Explain{/if}
         </button>
       </div>
-      {#if llmExplanation}
+      {#if llmLoading && !llmExplanation}
+        <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
+          <span
+            class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 dark:border-blue-400"
+          ></span>
+          &nbsp;AI is thinking...
+        </h4>
+      {:else if llmExplanation}
         <MarkdownOutput
           text={llmExplanation}
           collapseLength={250}

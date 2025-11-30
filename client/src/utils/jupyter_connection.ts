@@ -1,5 +1,4 @@
 import { traitlet } from '../stores';
-import type { ActionButton } from '../types';
 
 export interface BackendModel {
   get: (name: string) => any;
@@ -14,7 +13,7 @@ export interface BackendModel {
   };
 }
 
-export function createBackendConnection(model: BackendModel) {
+export function createJupyterBackendConnection(model: BackendModel) {
   const values = traitlet(model, 'values', {});
 
   // each key is a name of a variable or a group. The value can be another

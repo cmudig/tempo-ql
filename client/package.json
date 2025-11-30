@@ -4,9 +4,12 @@
   "version": "0.3.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "autobuild": "vite build --watch",
+    "dev": "vite --config widget.config.ts",
+    "build": "vite build --config widget.config.ts",
+    "autobuild": "vite build --watch --config widget.config.ts",
+    "dev-standalone": "vite",
+    "build-standalone": "vite build",
+    "autobuild-standalone": "vite build --watch",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },

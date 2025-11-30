@@ -36,5 +36,8 @@ version = "0.1.3"
 [project.urls]
 Homepage = "https://github.com/cmudig/tempo-ql"
 
-[tool.setuptools]
-packages = ["tempo_ql"]
+[tool.setuptools.packages.find]
+include = ["tempo_ql*"]
+
+[tool.setuptools.package-data]
+tempo_ql = ["*.txt"]

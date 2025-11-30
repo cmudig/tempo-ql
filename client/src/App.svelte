@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createBackendConnection } from './utils/backend';
+  import { createJupyterBackendConnection } from './utils/jupyter_connection';
 
   // Import all modular components
   import TabBar from './components/TabBar.svelte';
@@ -12,7 +12,7 @@
   export let model;
 
   // Create backend connection
-  const backend = createBackendConnection(model);
+  const backend = createJupyterBackendConnection(model);
 
   // Destructure stores and functions for cleaner usage
   const {
@@ -192,6 +192,7 @@
             subqueries={$subqueries}
             llmAvailable={$llmAvailable}
             llmExplanation={$llmExplanation}
+            llmLoading={$llmLoading}
             width="w-full"
           />
         {:else if activeTab === 'data-elements'}

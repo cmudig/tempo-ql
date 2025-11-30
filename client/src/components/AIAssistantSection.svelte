@@ -32,6 +32,7 @@
   function handleSubmit() {
     if (question.trim()) {
       onSubmit(question.trim());
+      tab = 'response';
       // Keep the question in the input box instead of clearing it
       if (inputElement) {
         inputElement.focus();
@@ -159,15 +160,7 @@
   {:else}
     <!-- AI Response Section -->
     <div class="h-full {scrollable ? 'overflow-auto' : ''}">
-      {#if isLoading}
-        <!-- Loading State -->
-        <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
-          <span
-            class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 dark:border-blue-400"
-          ></span>
-          &nbsp;AI is thinking...
-        </h4>
-      {:else if error}
+      {#if error}
         <!-- Error State -->
         <div
           class="bg-red-50 dark:bg-red-800/40 rounded-lg border border-red-200 dark:border-red-400 p-4 mb-4"
@@ -179,15 +172,24 @@
             {error}
           </div>
         </div>
-      {:else if llmResponse}
-        <!-- Success State -->
-        <div class="flex-1 overflow-y-auto ai-scrollbar">
-          <div
-            class="text-gray-700 dark:text-gray-200 text-sm leading-relaxed prose prose-sm max-w-none"
-          >
-            <MarkdownOutput text={llmResponse} {onRun} />
+      {:else}
+        {#if llmResponse}
+          <div class="flex-1 overflow-y-auto ai-scrollbar">
+            <div
+              class="text-gray-700 dark:text-gray-200 text-sm leading-relaxed prose prose-sm max-w-none"
+            >
+              <MarkdownOutput text={llmResponse} {onRun} />
+            </div>
           </div>
-        </div>
+        {/if}
+        {#if isLoading && !llmResponse}
+          <h4 class="text-blue-600 dark:text-blue-400 font-medium text-sm">
+            <span
+              class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 dark:border-blue-400"
+            ></span>
+            &nbsp;AI is thinking...
+          </h4>
+        {/if}
       {/if}
     </div>
   {/if}

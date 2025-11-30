@@ -2,6 +2,7 @@ include LICENSE
 include README.md
 
 graft tempo_ql/static
+include tempo_ql/prompt.txt
 
 # Patterns to exclude from any directory
 global-exclude *~
