@@ -418,6 +418,118 @@ Output:
             num_calls += 1
         raise Exception("Gemini made too many function calls, aborting request.")
     
+    def _call_gemini_api_stream(self, prompt: str, max_num_calls: int = 10, fast_model: bool = False):
+        """
+        Stream the Gemini API response chunk by chunk.
+        
+        Args:
+            prompt: The prompt to send to the API
+            
+        Yields:
+            Incremental text chunks emitted by the LLM
+            
+        Raises:
+            Exception: If the API call fails or the assistant is not available
+        """
+        if not self.is_available():
+            raise Exception("AI Assistant is not available. Please check your API key configuration.")
+        
+        from google.genai import types
+        
+        def chunk_stream():
+            max_stream_retries = 3
+            attempt = 0
+            while attempt < max_stream_retries:
+                attempt += 1
+                contents = [
+                    types.Content(
+                        role="user", parts=[types.Part(text=prompt)]
+                    )
+                ]
+                num_calls = 0
+                emitted_any = False
+                while num_calls < max_num_calls:
+                    handled_function_call = False
+                    try:
+                        stream = self.genai_client.models.generate_content_stream(
+                            model="gemini-2.5-flash-lite" if fast_model else "gemini-2.5-pro",
+                            contents=contents,
+                            config=self.fast_config if fast_model else self.config,
+                        )
+
+                        for chunk in stream:
+                            candidate = chunk.candidates[0]
+                            if candidate.content is None or not candidate.content.parts:
+                                continue
+
+                            function_parts = [
+                                part for part in candidate.content.parts
+                                if part.function_call is not None
+                            ]
+
+                            if function_parts:
+                                handled_function_call = True
+                                contents.append(candidate.content)
+                                for part in function_parts:
+                                    if part.function_call.name != "search_concepts":
+                                        continue
+                                    function_call = part.function_call
+                                    try:
+                                        args = function_call.args
+                                        query_filter = self.query_engine.parse_data_element_query(args["query"])
+                                        if ("name" in query_filter) == ("id" in query_filter):
+                                            function_response = "The input query must select based on exactly one of 'name' or 'id'. Please try again."
+                                        else:
+                                            query_field = 'name' if 'name' in query_filter else 'id'
+                                            query_filter = ConceptFilter(*query_filter[query_field])
+                                            scope = args.get("scope", None)
+                                            available_names = self.query_engine.dataset.list_data_elements(scope=scope, return_counts=True)
+                                            matching_names = available_names[query_filter.filter_series(available_names[query_field])]
+                                            function_response = json.dumps(matching_names.head(100).to_dict(orient='records'))
+                                            if len(matching_names) >= 100:
+                                                function_response = "More than 100 concepts matched the query. The results are truncated.\n" + function_response
+                                        print("Responding to function call:", query_filter, function_response)
+                                        response_part = types.Part.from_function_response(
+                                            name=function_call.name,
+                                            response={"result": function_response},
+                                        )
+                                        contents.append(types.Content(role="user", parts=[response_part]))
+                                    except Exception as e:
+                                        traceback.print_exc()
+                                        raise Exception(f"Error searching concepts during Gemini function call: {str(e)}")
+                                break
+
+                            text_parts = [part.text for part in candidate.content.parts if getattr(part, "text", None)]
+                            for text in text_parts:
+                                emitted_any = True
+                                yield text
+
+                        if handled_function_call:
+                            num_calls += 1
+                            continue
+                        if emitted_any:
+                            return
+                        break
+                    except Exception as e:
+                        traceback.print_exc()
+                        if attempt >= max_stream_retries:
+                            raise Exception(f"Error calling Gemini API: {str(e)}")
+                        break
+
+                if num_calls >= max_num_calls:
+                    raise Exception("Gemini made too many function calls, aborting request.")
+
+                if emitted_any:
+                    return
+
+                if attempt < max_stream_retries:
+                    print("Received empty response, retrying in 5s...")
+                    time.sleep(5)
+                    continue
+                raise Exception("Received empty response from Gemini after multiple attempts.")
+
+        return chunk_stream()
+    
     def _call_gemini_api_sql(self, prompt: str, fast_model: bool = False) -> str:
         """
         Call the Gemini API for SQL generation without function calling.
@@ -594,6 +706,7 @@ Please provide a clear explanation of:
                 'error': True
             }
         
+    # Replace in the future with process_question_stream
     def process_question(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a user question and return a processed AI response.
@@ -633,25 +746,25 @@ Please provide a clear explanation of:
                 prompt = self._create_explain_prompt(query, query_error, self.query_engine.dataset.get_table_context())
             
             # Call Gemini API
-            response = self._call_gemini_api(prompt)
-            while not response.strip():
-                print("Received empty response, retrying in 5s...")
+            response_text = self._call_gemini_api(prompt)
+            while not response_text.strip():
+                if self.verbose: print("Received empty response, retrying in 5s...")
                 time.sleep(5)
-                response = self._call_gemini_api(prompt)
-            
+                response_text = self._call_gemini_api(prompt)
+
             # Process the response based on mode
             if explain:
                 # For explain mode, don't extract queries - just return the explanation
                 processed_response = {
                     'extracted_query': None,
-                    'explanation': response,
+                    'explanation': response_text,
                     'has_query': False,
-                    'raw_response': response,
+                    'raw_response': response_text,
                     'error': False
                 }
             else:
                 # For generate mode, process normally to extract queries
-                processed_response = self._process_ai_response(response)
+                processed_response = self._process_ai_response(response_text)
                 processed_response['error'] = False
             
             return processed_response
@@ -666,6 +779,50 @@ Please provide a clear explanation of:
                 'error': True
             }
         
+    def process_question_stream(self, question: Optional[str] = None, explain: bool = False, query: Optional[str] = None, query_error: Optional[str] = None):
+        """
+        Process a user question and stream the AI response chunk by chunk.
+        
+        Args:
+            question: The user's question
+            explain: Whether to explain the query or answer the question
+            query: A query to explain
+            query_error: An error to explain along with the query
+
+        Yields:
+            Incremental text chunks emitted by the LLM
+        """
+
+        if not self.is_available():
+            yield {"error": "AI Assistant is not available. Please check your API key configuration."}
+            return
+        
+        try:
+            # Mode: Ask a question
+            if not explain:
+                assert question is not None, "question must be provided to run generation"
+                needs_existing_query = self.validate_question(question, query)
+                print(f"🔍 Needs existing query for generate mode: {needs_existing_query}")
+                if needs_existing_query and not query:
+                    yield {"error": "Answering your question seems to require an existing TempoQL query, but you haven't written one yet. Please try again."}
+                    return
+                prompt = self._create_data_analysis_prompt(question, 
+                                                           self.query_engine.dataset.get_table_context(), 
+                                                           existing_query=query if needs_existing_query else None)
+            else:
+                # For explain mode, check if the question contains a TempoQL query to explain
+                assert query is not None, "query must be provided to run explanation"
+                prompt = self._create_explain_prompt(query, query_error, self.query_engine.dataset.get_table_context())
+            
+            # Call Gemini API streamingly
+            response_stream = self._call_gemini_api_stream(prompt)
+            
+            for chunk in response_stream:
+                yield chunk
+
+        except Exception as e:
+            traceback.print_exc()
+            yield {"error": f"Error processing question: {str(e)}"}
     
     def test_connection(self) -> Dict[str, Any]:
         """

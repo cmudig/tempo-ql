@@ -155,7 +155,7 @@ class TempoQLService:
 
     # ==== AI WORKFLOW ====
     
-    def run_llm_explanation(self, query: str, query_error: str = ""):
+    def llm_explain_mode(self, query: str, query_error: str = ""):
         """Trigger AI explanation for a successful query."""
         if not (self.ai_assistant and self.ai_assistant.is_available()):
             print("⚠️ AI assistant not available for explanation")
@@ -186,7 +186,7 @@ class TempoQLService:
             traceback.print_exc()
             return {'ok': True, 'error': f"An error occurred while explaining your query: {str(e)}"} 
         
-    def process_llm_question(self, question: str, query: str = ""):
+    def llm_ask_mode(self, question: str, query: str = ""):
         if not question or not question.strip():
             return {'ok': False, 'error': 'No question provided.'}
         if not (self.ai_assistant and self.ai_assistant.is_available()):
@@ -213,3 +213,43 @@ class TempoQLService:
         except Exception as e:
             traceback.print_exc()
             return {'ok': False, 'error': f"{e}"}
+        
+    # streaming llm responses
+    def llm_ask_mode_stream(self, question: str, query: str = ""):
+        if not question or not question.strip():
+            yield {'ok': False, 'error': 'No question provided.'}
+            return
+        if not (self.ai_assistant and self.ai_assistant.is_available()):
+            yield {'ok': False, 'error': 'AI assistant not available.'}
+            return
+        
+        try:
+            response_data = self.ai_assistant.process_question_stream(
+                question=question.strip(), 
+                query=query.strip())
+            
+            for chunk in response_data:
+                yield chunk
+            
+        except Exception as e:
+            traceback.print_exc()
+            yield {'ok': False, 'error': f"{e}"}
+
+    def llm_explain_mode_stream(self, query: str, query_error: str = ""):
+        """Process a user question and return a processed AI response in streaming fashion."""
+        if not (self.ai_assistant and self.ai_assistant.is_available()):
+            yield {'ok': False, 'error': 'AI assistant not available.'}
+            return
+        
+        try:
+            response_data = self.ai_assistant.process_question_stream(
+                explain=True,
+                query=query, 
+                query_error=query_error)
+            
+            for chunk in response_data:
+                yield chunk
+            
+        except Exception as e:
+            traceback.print_exc()
+            yield {'ok': False, 'error': f"{e}"}

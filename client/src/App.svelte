@@ -189,6 +189,7 @@
             subqueries={$subqueries}
             llmAvailable={$llmAvailable}
             llmExplanation={$llmExplanation}
+            llmLoading={$llmLoading}
             width="w-full"
           />
         {:else if activeTab === 'data-elements'}

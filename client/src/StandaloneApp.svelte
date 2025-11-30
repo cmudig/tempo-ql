@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
+  import { onDestroy } from 'svelte';
   import { createHttpBackendConnection } from './utils/http_connection';
 
   // Import all modular components
@@ -20,8 +22,8 @@
     values,
     listNames,
     runQuery,
-    handleLLMQuestion,
-    handleLLMExplanation,
+    streamLLMExplanation,
+    streamLLMQuestion,
     subqueries,
     queryError,
     scopes,
@@ -64,12 +66,101 @@
   let queryHistoryDropdownPosition = { top: 0, left: 0 };
 
   let currentQueryPath: string[] = [];
+  let cancelLLMQuestionStream: (() => void) | null = null;
+  let cancelLLMExplanationStream: (() => void) | null = null;
 
-  // Handle LLM question submission (now handled by backend)
-  function handleLLMQuestionSubmit(question: string) {
-    currentQuestion = question; // Track the current question
-    handleLLMQuestion(question);
+  function extractTempoQuery(text: string) {
+    const match = text.match(/```tempoql\s*([\s\S]*?)```/i);
+    if (match) {
+      extractedQuery.set(match[1].trim());
+      hasExtractedQuery.set(true);
+    } else {
+      hasExtractedQuery.set(false);
+    }
   }
+
+  function pushAIHistoryEntry(question: string, answer: string) {
+    const queryText = get(extractedQuery) || '';
+    aiHistory.update((current) => {
+      const filtered = current.filter((entry) => entry.question !== question);
+      filtered.unshift({
+        question,
+        answer,
+        query: queryText,
+        timestamp: new Date().toISOString(),
+      });
+      return filtered.slice(0, 10);
+    });
+  }
+
+  function handleLLMQuestionSubmit(question: string) {
+    currentQuestion = question;
+    cancelLLMQuestionStream?.();
+    llmError.set('');
+    llmResponse.set('');
+    extractedQuery.set('');
+    hasExtractedQuery.set(false);
+    llmLoading.set(true);
+
+    let fullResponse = '';
+    cancelLLMQuestionStream = streamLLMQuestion(
+      question,
+      get(textInput),
+      (delta) => {
+        if (!delta) return;
+        fullResponse += delta;
+        llmResponse.update((prev) => prev + delta);
+      },
+      () => {
+        llmLoading.set(false);
+        extractTempoQuery(fullResponse);
+        pushAIHistoryEntry(question, fullResponse);
+        cancelLLMQuestionStream = null;
+      },
+      (err) => {
+        llmError.set(err);
+        llmLoading.set(false);
+        cancelLLMQuestionStream = null;
+      }
+    );
+  }
+
+  function handleLLMExplanationStream() {
+    const currentQuery = get(queryForResults);
+    const currentError = get(queryError);
+    if (!currentQuery) {
+      llmError.set('No query to explain');
+      return;
+    }
+
+    cancelLLMExplanationStream?.();
+    llmExplanation.set('');
+    llmError.set('');
+    llmLoading.set(true);
+
+    cancelLLMExplanationStream = streamLLMExplanation(
+      currentQuery,
+      currentError,
+      (delta) => {
+        if (!delta) return;
+        llmExplanation.update((prev) => prev + delta);
+      },
+      () => {
+        llmLoading.set(false);
+        cancelLLMExplanationStream = null;
+      },
+      (err) => {
+        llmError.set(err);
+        llmLoading.set(false);
+        cancelLLMExplanationStream = null;
+      }
+    );
+  }
+
+  onDestroy(() => {
+    cancelLLMQuestionStream?.();
+    cancelLLMExplanationStream?.();
+  });
 
   // Handle tab changes
   function handleTabChange(tab: string) {
@@ -152,7 +243,7 @@
     bind:currentQueryPath
     {dataFields}
     onRun={handleRun}
-    onExplain={handleLLMExplanation}
+    onExplain={handleLLMExplanationStream}
     onLLMSubmit={handleLLMQuestionSubmit}
     llmResponse={$llmResponse}
     llmLoading={$llmLoading}
@@ -176,18 +267,20 @@
       <!-- Tab Content -->
       <div class="flex-auto w-full min-h-0 z-0">
         {#if activeTab === 'results'}
-          <QueryResultsTab
-            bind:textInput={$textInput}
-            queryForResults={$queryForResults}
-            onRun={handleRun}
-            onExplain={handleLLMExplanation}
-            queryError={$queryError}
-            values={$values}
-            subqueries={$subqueries}
-            llmAvailable={$llmAvailable}
-            llmExplanation={$llmExplanation}
-            width="w-full"
-          />
+        <QueryResultsTab
+          bind:textInput={$textInput}
+          queryForResults={$queryForResults}
+          onRun={handleRun}
+          onExplain={handleLLMExplanationStream}
+          queryError={$queryError}
+          values={$values}
+          subqueries={$subqueries}
+          llmAvailable={$llmAvailable}
+          llmExplanation={$llmExplanation}
+          llmLoading={$llmLoading}
+          llmError={$llmError}
+          width="w-full"
+        />
         {:else if activeTab === 'data-elements'}
           <DataElementsTab
             scopes={$scopes}

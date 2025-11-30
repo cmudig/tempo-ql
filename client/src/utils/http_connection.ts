@@ -148,7 +148,7 @@ export function createHttpBackendConnection(apiBase = '/api') {
     try {
       const body = {
         question,
-        current_query_text: get(textInput),
+        query: get(textInput),
       };
       const resp = await fetchJson('/ai/ask', {
         method: 'POST',
@@ -189,7 +189,7 @@ export function createHttpBackendConnection(apiBase = '/api') {
 
     try {
       const body = {
-        query_for_results: currentQuery,
+        query: currentQuery,
         query_error: currentError,
       };
       const resp = await fetchJson('/ai/explain', {
@@ -206,6 +206,86 @@ export function createHttpBackendConnection(apiBase = '/api') {
       loadingMessage.set('');
     }
   }
+
+  // streaming llm explain and ask mode
+  function streamLLMExplanation(
+    query: string,
+    queryError: string,
+    onDelta: (text: string) => void,
+    onDone: () => void,
+    onError: (err: string) => void
+  ) {
+    const params = new URLSearchParams({
+      query,
+      query_error: queryError ?? '',
+    });
+    const es = new EventSource(`${apiBase}/ai/explain/stream?${params.toString()}`);
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data) return;
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && parsed.error) {
+          es.close();
+          onError(parsed.error);
+          return;
+        }
+      } catch {
+        onDelta(data);
+        return;
+      }
+    };
+    es.addEventListener('message', handleMessage);
+    es.addEventListener('done', () => {
+      es.close();
+      onDone();
+    });
+    es.addEventListener('error', () => {
+      es.close();
+      onError('Stream failed');
+    });
+    return () => es.close();
+  }
+
+  function streamLLMQuestion(
+    question: string,
+    query: string,
+    onDelta: (text: string) => void,
+    onDone: () => void,
+    onError: (err: string) => void
+  ) {
+    const params = new URLSearchParams({
+      question,
+      query: query ?? '',
+    });
+    const es = new EventSource(`${apiBase}/ai/ask/stream?${params.toString()}`);
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data) return;
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && parsed.error) {
+          es.close();
+          onError(parsed.error);
+          return;
+        }
+      } catch {
+        onDelta(data);
+        return;
+      }
+    };
+    es.addEventListener('message', handleMessage);
+    es.addEventListener('done', () => {
+      es.close();
+      onDone();
+    });
+    es.addEventListener('error', () => {
+      es.close();
+      onError('Stream failed');
+    });
+    return () => es.close();
+  } 
+
 
   async function handleScopeAnalysis(scopeName: string, forceRefresh = false) {
     if (!scopeName) return;
@@ -266,5 +346,7 @@ export function createHttpBackendConnection(apiBase = '/api') {
     handleLLMExplanation,
     handleQueryExtraction,
     handleScopeAnalysis,
+    streamLLMExplanation,
+    streamLLMQuestion
   };
 }

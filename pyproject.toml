@@ -32,10 +32,13 @@ dependencies = [
     "duckdb-engine",
     "google-genai"
 ]
-version = "0.1.1"
+version = "0.1.2"
 
 [project.urls]
 Homepage = "https://github.com/venkatesh-sivaraman/tempo-ql"
 
-[tool.setuptools]
-packages = ["tempo_ql"]
+[tool.setuptools.packages.find]
+include = ["tempo_ql*"]
+
+[tool.setuptools.package-data]
+tempo_ql = ["*.txt"]

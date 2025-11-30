@@ -283,7 +283,7 @@ class TempoQLWidget(anywidget.AnyWidget):
         
         if change['new'] == 'explain':
             self._set_loading(True, "Explaining query...")
-            response_data = self.service.run_llm_explanation(
+            response_data = self.service.llm_explain_mode(
                 query=self.query_for_results, 
                 query_error=self.query_error)
             self.llm_explanation = response_data.get('explanation', '')
@@ -305,7 +305,7 @@ class TempoQLWidget(anywidget.AnyWidget):
             self._set_loading(True, "Generating...")
             
             # Process AI question
-            response_data = self.service.process_llm_question(question=question, query=self.text_input.strip())
+            response_data = self.service.llm_ask_mode(question=question, query=self.text_input.strip())
             if not response_data.get('ok'):
                 self.llm_error = response_data.get('error', 'Unknown error')
                 return
