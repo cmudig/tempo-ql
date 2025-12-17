@@ -39,6 +39,15 @@
 
   let search = '';
 
+  const isAttribute = (concept: { type: string }) =>
+    concept.type === 'attribute';
+
+  const hasId = (concept: { id: any; name: string }) =>
+    concept.id !== undefined &&
+    concept.id !== null &&
+    concept.id !== '' &&
+    concept.id !== concept.name;
+
   // Calculate total count for all concepts
   $: totalCount = concepts.reduce((sum, concept) => sum + concept.count, 0);
 
@@ -104,6 +113,19 @@
   $: someFilteredSelected =
     filteredConcepts.some((c) => selectedConceptIDs.has(c.id)) &&
     !allFilteredSelected;
+
+  // Determine whether any selected concept requires name-only querying
+  $: selectionRequiresName = concepts.some(
+    (c) => selectedConceptIDs.has(c.id) && isAttribute(c)
+  );
+
+  // Determine whether any selected non-attribute concept has a usable ID
+  $: selectionHasId = concepts.some(
+    (c) => selectedConceptIDs.has(c.id) && !isAttribute(c) && hasId(c)
+  );
+
+  // If name-only concepts are selected, force query-by-name mode
+  $: if (selectionRequiresName && !queryByName) queryByName = true;
 
   function toggleSelectAllFiltered() {
     if (allFilteredSelected) {
@@ -376,7 +398,11 @@
                   title="Add this concept to your query"
                   class:invisible={!hovering}
                   on:click={() => {
-                    if (queryByName)
+                    if (isAttribute(concept)) {
+                      onInsert(scopeName, concept.name);
+                    } else if (!hasId(concept)) {
+                      onInsert(scopeName, `name = '${concept.name}'`);
+                    } else if (queryByName)
                       onInsert(scopeName, `name = '${concept.name}'`);
                     else if (
                       typeof concept.id === 'string' &&
@@ -402,27 +428,43 @@
           class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-200/50 disabled:dark:bg-gray-700/50 text-white disabled:text-gray-500/50 whitespace-nowrap"
           disabled={selectedConceptIDs.size == 0}
           on:click={() => {
+            const selected = concepts.filter((c) =>
+              selectedConceptIDs.has(c.id)
+            );
+            const attributeConcepts = selected.filter(isAttribute);
+            const otherConcepts = selected.filter((c) => !isAttribute(c));
+            const otherWithIds = otherConcepts.filter(hasId);
+            const otherWithoutIds = otherConcepts.filter((c) => !hasId(c));
+
+            attributeConcepts.forEach((c) => onInsert(scopeName, c.name));
+
             if (queryByName) {
-              let names = concepts
-                .filter((c) => selectedConceptIDs.has(c.id))
-                .map((c) => "'" + c.name + "'");
-              onInsert(scopeName, `name in (${names.join(', ')})`);
+              if (otherConcepts.length) {
+                const names = otherConcepts.map((c) => `'${c.name}'`);
+                onInsert(scopeName, `name in (${names.join(', ')})`);
+              }
             } else {
-              let ids;
-              if (
-                concepts.some(
-                  (c) =>
-                    typeof c.id === 'string' && Number.isNaN(parseFloat(c.id))
-                )
-              )
-                ids = concepts
-                  .filter((c) => selectedConceptIDs.has(c.id))
-                  .map((c) => `'${c.id}'`);
-              else
-                ids = concepts
-                  .filter((c) => selectedConceptIDs.has(c.id))
-                  .map((c) => `${c.id}`);
-              onInsert(scopeName, `id in (${ids.join(', ')})`);
+              if (otherWithoutIds.length) {
+                const names = otherWithoutIds.map((c) => `'${c.name}'`);
+                onInsert(scopeName, `name in (${names.join(', ')})`);
+              }
+
+              if (otherWithIds.length) {
+                let ids;
+                if (
+                  otherWithIds.some(
+                    (c) =>
+                      typeof c.id === 'string' && Number.isNaN(parseFloat(c.id))
+                  )
+                ) {
+                  ids = otherWithIds.map((c) => `'${c.id}'`);
+                } else {
+                  ids = otherWithIds.map((c) => `${c.id}`);
+                }
+                if (ids.length) {
+                  onInsert(scopeName, `id in (${ids.join(', ')})`);
+                }
+              }
             }
           }}
         >
@@ -434,9 +476,18 @@
         </button>
         <button
           on:click={() => (queryByName = !queryByName)}
-          disabled={selectedConceptIDs.size == 0}
+          disabled={
+            selectedConceptIDs.size == 0 ||
+            (!queryByName && (selectionRequiresName || !selectionHasId))
+          }
           class="px-3 py-1.5 font-semibold rounded transition-colors duration-200 bg-gray-200 hover:bg-gray-200/50 disabled:opacity-50 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white whitespace-nowrap"
-          title="Change whether to add to query by concept name or ID"
+          title={
+            !queryByName && selectionRequiresName
+              ? 'Selected items can only be queried by name'
+              : !queryByName && !selectionHasId
+                ? 'Selected items do not have IDs'
+                : 'Change whether to add to query by concept name or ID'
+          }
         >
           {#if queryByName}By Name{:else}By ID{/if}
         </button>
